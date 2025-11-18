@@ -5,7 +5,7 @@
 
 ---
 
-## **Features (Overall / Theoretical)**
+## **Features**
 
 - **User-Friendly Interface:** Designed for smooth navigation and an intuitive user experience.  
 - **Responsive Design:** Adapts seamlessly to different devices and screen sizes.  
