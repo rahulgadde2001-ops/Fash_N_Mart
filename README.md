@@ -2,7 +2,7 @@
 
 
 **Fash 'N' Mart** is a modern, responsive e-commerce platform designed to sell **fashion, grocery, and pharmacy products**. The system provides a **user-friendly interface**, interactive dashboard, and smooth navigation, making it easy for users to browse, search, and purchase products. It is fully responsive and works seamlessly across desktops, tablets, and mobile devices.
-
+We are adding new feature expiry date along with mfg date.
 ---
 
 ## **Features**
