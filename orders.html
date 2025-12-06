@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>orders</title>
+    <link rel="stylesheet" href="orders.css">
+</head>
+<body>
+
+
+    <header class="mainheader">
+    <div class="top">
+      <h1><img src="..\images\logo.png" alt="Fashion and Mart" width="30" height="30">Fashion N mart</h1>
+      <div class="search-container">
+        <input type="text" placeholder="Search Fashion, Pharmacy, Groceries...">
+        <button>🔍</button>
+        <a href="/profile" class="profile-icon">👤 Profile</a>
+        <a href="/cart" class="cart-icon">🛒 Cart (0)</a>
+      </div>
+    </div>
+  </header>
+
+<div class="layout">
+
+     <aside class="sidebar">
+        <ul>
+            <li><a href="profile.html" class="active">Profile</a></li>
+            <li><a href="addresses.html">Addresses</a></li>
+            <li><a href="orders.html">My Orders</a></li>
+            <li><a href="wishlists.html">Wishlists</a></li>
+            <li><a href="payments.html">Payments</a></li>
+            <li><a href="returns.html">Returns</a></li>
+            <li><a href="help.html">Help</a></li>
+            <li><a href="logout.html">Logout</a></li>
+        </ul>
+    </aside>
+  <div class="recent-orders">
+    <h3>Recent Orders</h3>
+    <div class="order-items">
+    <div class="order-item">
+    <p><strong> Order #12345</strong> </p>
+    <p>Status:Shipped</p>
+    <button onclick="trackOrder(12345)">Track Order</button>
+    </div>
+
+    <div class="order-item">
+    <p><strong>Order #9876 </strong></p>
+    <p>Status:Delivered</p>
+    <button onclick="goToDetails()">View Details</button>
+    </div>
+    </div>
+    </div>
+  <footer>
+    <div>
+      <p>© 2025 Fashion 'N' Mart. All Rights Reserved.</p>
+    </div>
+  </footer>
+  <script src="orders.js"></script>
+   
+</body>
+</html>
