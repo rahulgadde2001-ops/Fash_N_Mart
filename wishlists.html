@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wishlists</title>
+  <link rel="stylesheet" href="wishlists.css">
+</head>
+
+<body>
+<header class="mainheader">
+    <div class="top">
+      <h1><img src="..\images\logo.png" alt="Fashion and Mart" width="30" height="30">Fashion N mart</h1>
+      <div class="search-container">
+        <input type="text" placeholder="Search Fashion, Pharmacy, Groceries...">
+        <button>🔍</button>
+        <a href="/profile" class="profile-icon">👤 Profile</a>
+        <a href="/cart" class="cart-icon">🛒 Cart (0)</a>
+      </div>
+    </div>
+  </header>
+
+     <aside class="sidebar">
+        <ul>
+            <li><a href="profile.html" class="active">Profile</a></li>
+            <li><a href="addresses.html">Addresses</a></li>
+            <li><a href="orders.html">My Orders</a></li>
+            <li><a href="wishlists.html">Wishlists</a></li>
+            <li><a href="payments.html">Payments</a></li>
+            <li><a href="returns.html">Returns</a></li>
+            <li><a href="help.html">Help</a></li>
+            <li><a href="logout.html">Logout</a></li>
+        </ul>
+    </aside>
+
+  <main class="content-area">
+    <h2>Your Wishlist</h2>
+
+  <div class="cards">
+    <div class="card">
+        <div>
+            <p>Blue Denim Jacket</p>
+            <p>Rs. 2999</p>
+        </div>
+        <button onclick="buyNow()">Buy Now</button>
+          
+    </div>
+
+    <div class="card">
+        <div>
+            <p>Wireless Earbuds</p>
+            <p>Rs. 1500</p>
+        </div>
+        <button onclick="buyNow()">Buy Now</button>
+        
+    </div>
+  </div>
+
+  
+  </main>
+  <footer>
+    <div>
+      <p>© 2025 Fashion 'N' Mart. All Rights Reserved.</p>
+    </div>
+  </footer>
+
+</body>
+</html>
