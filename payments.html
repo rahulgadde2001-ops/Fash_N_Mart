@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>payments</title>
+     <link rel="stylesheet" href="payments.css">
+</head>
+<body>
+
+  <header class="mainheader">
+    <div class="top">
+      <h1><img src="..\images\logo.png" alt="Fashion and Mart" width="30" height="30">Fashion N mart</h1>
+      <div class="search-container">
+        <input type="text" placeholder="Search Fashion, Pharmacy, Groceries...">
+        <button>🔍</button>
+        <a href="/profile" class="profile-icon">👤 Profile</a>
+        <a href="/cart" class="cart-icon">🛒 Cart (0)</a>
+      </div>
+    </div>
+  </header>
+
+
+    <div class="main-section">
+    <aside class="sidebar">
+        <ul>
+            <li><a href="profile.html">Profile</a></li>
+            <li><a href="addresses.html">Addresses</a></li>
+            <li><a href="orders.html">My Orders </a></li>
+            <li><a href="wishlists.html">Wishlists </a></li>
+            <li><a href="payments.html">Payments </a></li>
+            <li><a href="returns.html">Returns </a></li>
+            <li><a href="help.html">Help </a></li>
+            <li><a href="logout.html">Logout </a></li>
+
+        </ul>
+    </aside>
+
+    <main class="main-payment">
+        <h3>Payment History</h3>
+      <div class="payment-items">
+        <div class="payment-item">
+           <div>
+            <p><strong>Invoice #001</strong></p>
+            <p>Amount: Rs.100</p>
+            <P>Status:Paid</P>
+            <button onclick="downloadInvoice()">Download</button>
+          
+
+           </div>
+        </div>
+
+
+         <div class="payment-item">
+          <div>
+            <p><strong>Invoice #004</strong></p>
+            <p>Amount: Rs.500</p>
+            <P>Status:Pending</P>
+            <button onclick=" redirectToPayment()">Pay Now</button>
+    
+
+          </div>
+         </div>
+      </div>
+    </div>
+    
+    </main>
+      <footer>
+    <div>
+      <p>© 2025 Fashion 'N' Mart. All Rights Reserved.</p>
+    </div>
+  </footer>
+  <script src="payments.js"></script>
+</body>
+</html>
