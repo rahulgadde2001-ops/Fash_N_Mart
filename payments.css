@@ -1,0 +1,187 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  background-color: #fff;
+  padding-top: 110px; 
+ 
+   
+}
+
+
+header{
+  position: fixed;
+  display: flex;
+  justify-content:space-between;
+  align-content: center;
+  background-color: black;
+  flex-wrap: wrap;
+  color:#fff;
+  padding: 6px;
+  width:100%;
+  top:0;
+  z-index:1000;
+
+}
+
+header h1,
+.search-container {
+  display: inline-block;
+  vertical-align:middle;
+ margin-top: 10px;
+
+}
+
+header h1 {
+  font-size: 1.6rem;
+  margin-right: 20px;
+}
+header img {
+  vertical-align: middle;
+  margin-right: 5px;
+}
+.top {
+  
+  display:flex;
+  justify-content: center;
+  align-items: center;
+}
+
+
+.search-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-container input {
+  width: 675px;
+  padding: 8px 6px;
+  border-radius: 4px;
+  border: none;
+  outline: none;
+}
+
+.search-container button {
+  padding: 8px;
+  background-color: #ffcc00;
+  border: none;
+  cursor: pointer;
+  border-radius: 4px;
+  font-weight: bold;
+  margin-left: 25px;
+}
+
+
+.cart-icon,.profile-icon {
+  color: white;
+  text-decoration: none;
+  font-weight: bold;
+  background-color:black;
+  padding: 8px 10px;
+  border-radius: 5px;
+}
+
+.cart-icon:hover ,.profile-icon:hover{
+  background-color:white;
+  color: #222;
+}
+.main-section{
+    display: flex;
+
+}
+.sidebar{
+    background-color:whitesmoke;
+    color:black;
+    min-height: calc(100vh - 70px);
+    position: fixed;
+    width:250px;
+    top:60px;
+    left:0;
+    margin-top: 10px;
+    border: 2px solid white;
+    border-radius: 6px;
+}
+
+.sidebar li{
+    padding:15px;
+    font-weight: bold;
+    cursor: pointer;
+  
+}
+.sidebar ul li {
+  padding: 12px 20px;
+  transition: 0.3s ease;
+}
+
+.sidebar ul li a{
+  text-decoration: none;
+  color:black;
+}
+.sidebar li:hover{
+  background-color:white;
+}
+.sidebar li:hover a{
+  color:red;
+
+}
+.sidebar li, .sidebar li a {
+  transition: 0.3s ease;
+}
+
+.main-payment{
+   padding:30px;
+   margin-left: 250px; /* Add this */
+   text-align: center;
+  
+}
+
+
+
+.main-payment h2{
+   
+    padding:0 40px;
+}
+.payment-items{
+  display:flex;
+ justify-content:center;
+  align-items: center;
+  flex-direction: column;
+  
+
+}
+.payment-item{
+    border-radius: 10px;
+    background-color: white;
+    padding:40px 30px;
+    margin:10px ;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    transition: 0.4s;
+    
+}
+.payment-items:hover{
+    transform: translateY(-5px);
+}
+.payment-items button{
+  color:white;
+  background-color: black;
+}
+.payment-items button:hover{
+  background-color:chartreuse;
+}
+
+footer {
+  background-color: #222;
+  color: #ddd;
+  text-align: center;
+  padding: 10px 0;
+  position:absolute;
+  bottom: 0;
+  width: 100%;
+  
+  
+}
