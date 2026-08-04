@@ -401,3 +401,129 @@ def revoke_refresh_token(
     finally:
 
         db.close()
+
+SECRET_KEY=your_secret_key
+
+DATABASE_URL=sqlite:///./platform.db
+
+TRUST_PROXY=false
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+from app.core.config import DATABASE_URL
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False}
+)
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
+
+Base = declarative_base()
+
+
+def get_db():
+    db = SessionLocal()
+
+    try:
+        yield db
+
+    finally:
+        db.close()
+        pip install sqlalchemy
+pip install psycopg2-binarySECRET_KEY=your_secret_key
+
+DATABASE_URL=postgresql+psycopg2://postgres:password@localhost/platform_service
+
+TRUST_PROXY=false
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+from app.core.config import DATABASE_URL
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True
+)
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
+
+Base = declarative_base()
+
+
+def get_db():
+    db = SessionLocal()
+
+    try:
+        yield db
+
+    finally:
+        db.close()
+
+    paswd valid.py"""
+Password Validation
+
+Checks whether a password satisfies
+the company's security policy.
+
+Rules:
+1. Minimum 12 characters
+2. One uppercase letter
+3. One lowercase letter
+4. One number
+5. One special character
+"""
+
+import re
+
+from fastapi import HTTPException, status
+
+
+def validate_password(password: str):
+    """
+    Validate password strength.
+    Raises HTTPException if validation fails.
+    """
+
+    # Rule 1: Minimum length
+    if len(password) < 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 12 characters long."
+        )
+
+    # Rule 2: At least one uppercase letter
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must contain at least one uppercase letter."
+        )
+
+    # Rule 3: At least one lowercase letter
+    if not re.search(r"[a-z]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must contain at least one lowercase letter."
+        )
+
+    # Rule 4: At least one digit
+    if not re.search(r"\d", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must contain at least one number."
+        )
+
+    # Rule 5: At least one special character
+    if not re.search(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>/?]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must contain at least one special character."
+        )
