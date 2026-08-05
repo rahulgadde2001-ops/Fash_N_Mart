@@ -477,5 +477,429 @@ def logout(body: LogoutRequest):
     return {
         "message": "Logged out successfully"
     }
+# Platform Service
+
+## Overview
+
+Platform Service is responsible for authentication and authorization for the Supply Chain Management System.
+
+It provides secure JWT-based authentication, refresh token management, Role-Based Access Control (RBAC), login security, and permission management.
+
+---
+
+# Features
+
+* User authentication
+* JWT Access Token (15 minutes)
+* JWT Refresh Token (7 days)
+* Refresh token storage in database
+* Refresh token revocation (Logout)
+* Protected APIs
+* Role-Based Access Control (RBAC)
+* Role hierarchy support
+* Login rate limiting
+* Failed login tracking
+* Password policy validation
+* BCrypt password hashing
+
+---
+
+# Tech Stack
+
+* FastAPI
+* Python
+* SQLAlchemy
+* SQLite (Development)
+* PostgreSQL (Production)
+* Pydantic
+* Uvicorn
+* python-jose
+* passlib
+* bcrypt
+* pytest
+
+---
+
+# Project Structure
+
+```text
+app/
+├── main.py
+├── db/
+│   └── database.py
+├── routes/
+│   ├── auth_routes.py
+│   ├── user_routes.py
+│   └── admin_routes.py
+├── services/
+│   └── auth_service.py
+├── schemas/
+│   ├── auth.py
+│   └── user.py
+├── core/
+│   ├── config.py
+│   ├── security.py
+│   └── dependencies.py
+└── models/
+    ├── refresh_token.py
+    └── failed_login.py
+```
+
+---
+
+# Database
+
+Development Database
+
+* SQLite
+
+Production Database
+
+* PostgreSQL
+
+Current Tables
+
+* refresh_tokens
+* failed_login_attempts
+
+---
+
+# Roles
+
+Implemented Roles
+
+* ceo
+* vp_operations
+* procurement_manager
+* logistics_manager
+* compliance_officer
+* warehouse_manager
+* analyst
+* supplier
+
+---
+
+# Role Hierarchy
+
+```
+ceo
+└── vp_operations
+    └── procurement_manager
+        └── logistics_manager
+            └── warehouse_manager
+```
+
+Higher roles automatically inherit permissions from lower roles.
+
+Example:
+
+* CEO automatically has VP Operations permissions.
+* VP Operations automatically has Procurement Manager permissions.
+
+---
+
+# Password Policy
+
+Passwords must contain:
+
+* Minimum 12 characters
+* At least one uppercase letter
+* At least one lowercase letter
+* At least one number
+* At least one special character
+
+Passwords are securely hashed using BCrypt before storage.
+
+---
+
+# API Endpoints
+
+## Login
+
+```
+POST /api/v1/auth/login
+```
+
+Returns:
+
+* Access Token
+* Refresh Token
+
+---
+
+## Refresh Token
+
+```
+POST /api/v1/auth/refresh
+```
+
+Body
+
+```json
+{
+    "refresh_token": "<refresh_token>"
+}
+```
+
+Returns a new Access Token if the Refresh Token is valid and not revoked.
+
+---
+
+## Logout
+
+```
+POST /api/v1/auth/logout
+```
+
+Body
+
+```json
+{
+    "refresh_token": "<refresh_token>"
+}
+```
+
+Revokes the refresh token from the database.
+
+After logout, the refresh token cannot be used again.
+
+---
+
+## Current User
+
+```
+GET /api/v1/users/me
+```
+
+Headers
+
+```
+Authorization: Bearer <access_token>
+```
+
+Returns logged-in user information.
+
+---
+
+## User Permissions
+
+```
+GET /api/v1/auth/me/permissions
+```
+
+Headers
+
+```
+Authorization: Bearer <access_token>
+```
+
+Returns all effective permissions for the logged-in user based on the role hierarchy.
+
+---
+
+## RBAC Test
+
+```
+GET /api/v1/admin/test
+```
+
+Allowed Roles
+
+```
+ceo
+vp_operations
+```
+
+---
+
+# Authentication Flow
+
+```
+User Login
+      │
+      ▼
+Validate Credentials
+      │
+      ▼
+Generate Access Token (15 min)
+Generate Refresh Token (7 days)
+      │
+      ▼
+Store Refresh Token in Database
+      │
+      ▼
+Access Protected APIs
+      │
+      ▼
+Access Token Expires
+      │
+      ▼
+POST /auth/refresh
+      │
+      ▼
+Generate New Access Token
+      │
+      ▼
+POST /auth/logout
+      │
+      ▼
+Refresh Token Revoked
+```
+
+---
+
+# Security Features
+
+* BCrypt password hashing
+* JWT Authentication
+* Access Token expiration (15 minutes)
+* Refresh Token expiration (7 days)
+* Refresh Token stored in database
+* Refresh Token revocation
+* Login rate limiting
+* Failed login tracking
+* Generic authentication error messages
+* Password policy validation
+* Role hierarchy support
+
+---
+
+# Login Protection
+
+Implemented protections:
+
+* Maximum 5 failed login attempts
+* 15-minute lockout window
+* Failed login IP tracking
+* Failed login timestamp logging
+* Generic "Invalid credentials" response for invalid username/password
+
+---
+
+# Setup
+
+## Create Virtual Environment
+
+```bash
+python -m venv .venv
+```
+
+Activate
+
+Windows
+
+```bash
+.venv\Scripts\activate
+```
+
+---
+
+## Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## Create Environment File
+
+Copy
+
+```text
+.env.example
+```
+
+to
+
+```text
+.env
+```
+
+Generate a secure secret key
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Set
+
+```env
+SECRET_KEY=<generated-secret-key>
+```
+
+---
+
+## Run the Application
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Swagger UI
+
+```
+http://127.0.0.1:8000/docs
+```
+
+---
+
+# Testing
+
+Implemented Tests
+
+* Application health check
+* Login success
+* Invalid password
+* Invalid user
+* Current user endpoint
+* Unauthorized access
+* RBAC authorization
+* Forbidden role access
+* Expired JWT rejection
+* Tampered JWT rejection
+* Refresh token success
+* Invalid refresh token type
+* Malformed refresh token rejection
+* Logout revokes refresh token
+* Login rate limiting (5 failed attempts → 429)
+* Different users have independent rate limits
+* CEO inherits VP Operations permissions
+
+---
+
+# Current Status
+
+Implemented
+
+* JWT Authentication
+* Access Tokens
+* Refresh Tokens
+* Refresh Token Database Storage
+* Logout (Refresh Token Revocation)
+* Role-Based Access Control (RBAC)
+* Role Hierarchy
+* Login Rate Limiting
+* Failed Login Tracking
+* Password Policy Validation
+* Protected APIs
+* SQLite Integration
+* PostgreSQL Ready
+* Unit Testing
+
+---
+
+# Future Enhancements
+
+* User Registration
+* Forgot Password
+* Password Reset
+* Email Verification
+* Database-backed User Management
+* OAuth Login
+* API Keys for Service-to-Service Authentication
+* Refresh Token Rotation
+* Audit Logging
+* Multi-Factor Authentication (MFA)
 
 
