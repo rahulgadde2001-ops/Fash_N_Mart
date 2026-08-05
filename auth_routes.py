@@ -1,23 +1,3 @@
-authserv
-from datetime import datetime, timedelta, timezone
-
-from fastapi import HTTPException, status
-from app.schemas.user import Role
-from app.core.security import hash_password, verify_password
-
-from app.core.security import (
-    create_access_token,
-    create_refresh_token
-)  
-from app.database import SessionLocal
-from app.models.refresh_token import RefreshToken
-from app.models.failed_login import FailedLoginAttempt
-
-login_attempts = {}
-
-MAX_ATTEMPTS = 5
-WINDOW = timedelta(minutes=15)
-
 def save_refresh_token(user_id: int, token: str, expires_at):
 
     db = SessionLocal()
@@ -173,77 +153,6 @@ def login_user(
         "token_type": "bearer"
     }
 
-
-users = {
-    "ceo@company.com": {
-        "user_id": 1,
-        "email": "ceo@company.com",
-        "password": hash_password("ceo@company12"),
-        "full_name": "Company CEO",
-        "role": Role.ceo,
-        "is_active": True,
-    },
-    "warehousemanager@company.com": {
-        "user_id": 2,
-        "email": "warehousemanager@company.com",
-        "password": hash_password("warehouse@123"),
-        "full_name": "Warehouse Manager",
-        "role": Role.warehouse_manager,
-        "is_active": True,
-    },
-    "vpoperations@company.com":{
-                "user_id": 3,
-                "email": "vpoperations@company.com",
-                "password": hash_password("vpoperations@12"),
-                "full_name": "vp_operations Manager",
-                "role": Role.vp_operations,
-                "is_active": True,
-    },
-    "procurementmanager@company.com":{
-                "user_id":4,
-                "email":"procurementmanager@company.com",
-                "password":hash_password("procurement@123"),
-                "full_name":"procurement_manager",
-                "role":Role.procurement_manager,
-                "is_active":True,
-
-    },
-     "logisticsmanager@company.com":{
-                    "user_id":5,
-                    "email":"logisticsmanager@company.com",
-                    "password":hash_password("logistics123"),
-                    "full_name":"logistics_manager",
-                    "role":Role.logistics_manager,
-                    "is_active":True,
-     },
-    "compliance@company.com":{
-                    "user_id":6,
-                    "email":"compliance@company.com",
-                    "password":hash_password("compliance@12"),
-                    "full_name":"compliance_officer",
-                    "role":Role.compliance_officer,
-                    "is_active":True,
-    },
-    "analyst@company.com":{
-                            "user_id":7,
-                            "email":"analyst@company.com",
-                            "password":hash_password("analyst@1234"),
-                            "full_name":"analyst",
-                            "role":Role.analyst,
-                            "is_active":True,
-    },
-    "supplier@company.com":{
-                            "user_id":8,
-                            "email":"supplier@company.com",
-                            "password":hash_password("supplier@123"),
-                            "full_name":"supplier",
-                            "role":Role.supplier,
-                            "is_active":True,
-    }
-        
-}
-
-
 def login(username: str, password: str):
 
     user = users.get(username)
@@ -255,63 +164,6 @@ def login(username: str, password: str):
         return None
 
     return user
-
-
-authroute 
-from fastapi import APIRouter , HTTPException,Depends, Request,status
-from fastapi.security import OAuth2PasswordRequestForm
-from jose import JWTError
-
-from app.core.config import TRUST_PROXY
-from app.services.auth_service import (
-    login_user,
-    users,
-    get_refresh_token,
-    revoke_refresh_token 
-)
-from app.schemas.auth import (
-    TokenResponse,
-    RefreshRequest,
-    AccessTokenResponse,
-    LogoutRequest
-)
-from app.core.security import (
-    create_access_token,
-    decode_token,
-)
-from app.core.dependencies import (
-    get_current_user,
-    ROLE_HIERARCHY,
-)
-
-router = APIRouter(
-    prefix="/api/v1/auth",
-    tags=["Authentication"]
-)
-
-def get_client_ip(request: Request) -> str:
-# Only trust X-Forwarded-For when we are actually behind a proxy we control.
-# Otherwise any caller can forge it and reset their own rate-limit bucket.
-    if TRUST_PROXY:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-@router.post(
-"/login",
-response_model=TokenResponse
-)
-def login(
-    request: Request,
-    form_data: OAuth2PasswordRequestForm = Depends()
-):
-    return login_user(
-        username=form_data.username,
-        password=form_data.password,
-        client_ip=get_client_ip(request)
-    )
-
 
 @router.post(
 "/refresh",
@@ -391,52 +243,6 @@ def logout(body: LogoutRequest):
         "message": "Logged out successfully"
     }
 
-test 
-def test_logout_revokes_refresh_token():
-    clear_attempts()
-
-    login = login_as_ceo()
-    refresh = login.json()["refresh_token"]
-
-    logout = client.post(
-        "/api/v1/auth/logout",
-        json={
-            "refresh_token": refresh
-        }
-    )
-
-    assert logout.status_code == 200
-
-    response = client.post(
-        "/api/v1/auth/refresh",
-        json={
-            "refresh_token": refresh
-        }
-    )
-
-    assert response.status_code == 401
-
-
-def test_ceo_has_vp_permissions():
-    clear_attempts()
-
-    login = login_as_ceo()
-
-    token = login.json()["access_token"]
-
-    response = client.get(
-        "/api/v1/auth/me/permissions",
-        headers={
-            "Authorization": f"Bearer {token}"
-        }
-    )
-
-    assert response.status_code == 200
-
-    permissions = response.json()["permissions"]
-
-    assert "vp_operations" in permissions
-
 
 depen from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -448,7 +254,6 @@ from app.services.auth_service import users
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/api/v1/auth/login"
 )
-
 
 # Authentication
 def get_current_user(
@@ -481,46 +286,6 @@ def get_current_user(
             detail="Invalid or expired token"
         )
 
-
-ROLE_HIERARCHY = {
-    "ceo": {
-        "ceo",
-        "vp_operations",
-        "procurement_manager",
-        "logistics_manager",
-        "compliance_officer",
-        "warehouse_manager",
-        "analyst",
-        "supplier",
-    },
-    "vp_operations": {
-        "vp_operations",
-        "procurement_manager",
-        "logistics_manager",
-        "compliance_officer",
-        "warehouse_manager",
-        "analyst",
-        "supplier",
-    },
-    "procurement_manager": {
-        "procurement_manager"
-    },
-    "logistics_manager": {
-        "logistics_manager"
-    },
-    "compliance_officer": {
-        "compliance_officer"
-    },
-    "warehouse_manager": {
-        "warehouse_manager"
-    },
-    "analyst": {
-        "analyst"
-    },
-    "supplier": {
-        "supplier"
-    },
-}
 
 def require_any_role(*allowed_roles):
 
@@ -585,32 +350,19 @@ def require_role(*allowed_roles):
         return user
 
     return dependency
+from datetime import datetime, timezone
+from sqlalchemy import Boolean, Column, DateTime, Integer, String 
+from app.database import Base
 
-db from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+def utc_now():
+    return datetime.now(timezone.utc)
 
-from app.core.config import DATABASE_URL
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
-
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
-
-Base = declarative_base()
-
-
-def get_db():
-    db = SessionLocal()
-
-    try:
-        yield db
-
-    finally:
-        db.close()
-DATABASE_URL=sqlite:///./platform.db
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    token = Column(String(512), unique=True, nullable=False, index=True)
+    is_revoked = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
