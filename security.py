@@ -527,3 +527,50 @@ def validate_password(password: str):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password must contain at least one special character."
         )
+
+
+from datetime import datetime, timezone
+
+from sqlalchemy import Boolean, Column, DateTime, Integer, String
+
+from app.db.database import Base
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    user_id = Column(Integer, nullable=False, index=True)
+
+    token = Column(String(512), unique=True, nullable=False)
+
+    is_revoked = Column(Boolean, default=False)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, DateTime, Integer, String
+
+from app.db.database import Base
+
+
+class FailedLoginAttempt(Base):
+    __tablename__ = "failed_login_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    email = Column(String(255), nullable=False, index=True)
+
+    ip_address = Column(String(100), nullable=False)
+
+    attempted_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc)
+    )
