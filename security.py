@@ -1,55 +1,224 @@
-from fastapi.testclient import TestClient
-from app.main import app
-from app.services.auth_service import login_attempts
-from app.core.security import create_access_token
-from datetime import timedelta
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    status,
+)
 
-client = TestClient(app)
+from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+
+from app.core.config import TRUST_PROXY
+
+from app.core.security import (
+    create_access_token,
+    decode_token,
+)
+
+from app.core.dependencies import (
+    get_current_user,
+    ROLE_HIERARCHY,
+)
+
+from app.schemas.auth import (
+    TokenResponse,
+    RefreshRequest,
+    AccessTokenResponse,
+    LogoutRequest,
+    RegisterRequest,
+)
+
+from app.services.auth_service import (
+    login_user,
+    register_user,
+    users,
+    get_refresh_token,
+    revoke_refresh_token,
+)
 
 
-def clear_attempts():
-    login_attempts.clear()
+router = APIRouter(
+    prefix="/api/v1/auth",
+    tags=["Authentication"]
+)
 
 
-def login_as_ceo():
-    return client.post(
-        "/api/v1/auth/login",
-        data={
-            "username": "ceo@company.com",
-            "password": "ceocompany@123"
-        }
+# ============================================================
+# CLIENT IP
+# ============================================================
+
+def get_client_ip(request: Request) -> str:
+    """
+    Get the client's IP address.
+
+    X-Forwarded-For is trusted only when the application
+    is configured to run behind a trusted reverse proxy.
+    """
+
+    if TRUST_PROXY:
+        forwarded_for = request.headers.get(
+            "X-Forwarded-For"
+        )
+
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+
+    return request.client.host if request.client else "unknown"
+
+
+# ============================================================
+# REGISTER
+# ============================================================
+
+@router.post("/register")
+def register(
+    request: RegisterRequest,
+    db: Session = Depends(get_db)
+):
+    return register_user(
+        db=db,
+        request=request
     )
 
 
-def test_root():
-    response = client.get("/")
+# ============================================================
+# LOGIN
+# ============================================================
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "message": "Platform Service is running"
+@router.post(
+    "/login",
+    response_model=TokenResponse
+)
+def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    client_ip = get_client_ip(request)
+
+    return login_user(
+        db=db,
+        username=form_data.username,
+        password=form_data.password,
+        client_ip=client_ip
+    )
+
+
+# ============================================================
+# REFRESH TOKEN
+# ============================================================
+
+@router.post(
+    "/refresh",
+    response_model=AccessTokenResponse
+)
+def refresh_token(
+    body: RefreshRequest
+):
+    try:
+        payload = decode_token(
+            body.refresh_token
+        )
+
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
+    # Make sure this is actually a refresh token
+    if payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
+    refresh = get_refresh_token(
+        body.refresh_token
+    )
+
+    if refresh is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked refresh token"
+        )
+
+    email = payload.get("sub")
+
+    user = users.get(email)
+
+    if user is None or not user["is_active"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
+    access_token = create_access_token(
+        {
+            "sub": user["email"],
+            "role": user["role"].value,
+            "user_id": user["user_id"]
+        }
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
     }
 
 
-def test_login_success():
-    clear_attempts()
+# ============================================================
+# CURRENT USER PERMISSIONS
+# ============================================================
 
-    response = login_as_ceo()
+@router.get("/me/permissions")
+def my_permissions(
+    user=Depends(get_current_user)
+):
+    role = getattr(
+        user["role"],
+        "value",
+        user["role"]
+    )
 
-    assert response.status_code == 200
+    return {
+        "role": role,
+        "permissions": sorted(
+            list(
+                ROLE_HIERARCHY.get(
+                    role,
+                    {role}
+                )
+            )
+        )
+    }
 
-    body = response.json()
 
-    assert "access_token" in body
-    assert "refresh_token" in body
-    assert body["token_type"] == "bearer"
+# ============================================================
+# LOGOUT
+# ============================================================
 
+@router.post("/logout")
+def logout(
+    body: LogoutRequest
+):
+    success = revoke_refresh_token(
+        body.refresh_token
+    )
 
-def test_invalid_password():
-    clear_attempts()
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Refresh token not found"
+        )
 
-    response = client.post(
-        "/api/v1/auth/login",
-        data={
+    return {
+        "message": "Logged out successfully"
+    }
             "username": "ceo@company.com",
             "password": "wrongpassword"
         }
