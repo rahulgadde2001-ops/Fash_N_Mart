@@ -1,217 +1,129 @@
-def save_refresh_token(user_id: int, token: str, expires_at):
 
-    db = SessionLocal()
-
-    try:
-        refresh = RefreshToken(
-            user_id=user_id,
-            token=token,
-            expires_at=expires_at
-        )
-
-        db.add(refresh)
-        db.commit()
-
-    finally:
-        db.close()
-
-
-def get_refresh_token(token: str):
-
-    db = SessionLocal()
-
-    try:
-        return (
-            db.query(RefreshToken)
-            .filter(
-                RefreshToken.token == token,
-                RefreshToken.is_revoked == False
-            )
-            .first()
-        )
-
-    finally:
-        db.close()
+from fastapi import APIRouter , HTTPException,Depends, Request,status
+from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError
+from app.core.config import TRUST_PROXY
+from app.models.user import User
+from app.services.auth_service import (
+    login_user,
+    get_refresh_token,
+    revoke_refresh_token,
+    register_user
+)
+from app.schemas.auth import (
+    TokenResponse,
+    RegisterRequest,
+    AccessTokenResponse,
+    RefreshRequest,
+    LogoutRequest
+)
+from app.core.security import (
+    create_access_token,
+    decode_token,
+)
+from app.core.dependencies import (
+    get_current_user,
+    ROLE_HIERARCHY,
+)
+from sqlalchemy.orm import Session
+from app.database import get_db
 
 
-def revoke_refresh_token(token: str):
-
-    db = SessionLocal()
-
-    try:
-
-        refresh = (
-            db.query(RefreshToken)
-            .filter(RefreshToken.token == token)
-            .first()
-        )
-
-        if refresh is None:
-            return False
-
-        refresh.is_revoked = True
-
-        db.commit()
-
-        return True
-
-    finally:
-        db.close()
-
-def log_failed_login(email: str, ip_address: str):
-
-    db = SessionLocal()
-
-    try:
-        db.add(
-            FailedLoginAttempt(
-                email=email,
-                ip_address=ip_address
-            )
-        )
-
-        db.commit()
-
-    finally:
-        db.close()
-
-def login_user(
-    username: str,
-    password: str,
-    client_ip: str
-):
-
-    now = datetime.now(timezone.utc)
-    # Key on (email, ip) so a few bad attempts for one account cannot lock out
-    # every other user sharing that IP (NAT / office network / load balancer).
-    key = (username.lower(),client_ip)
-
-    attempts = [
-        t for t in login_attempts.get(key,[])
-        if now - t < WINDOW
-    ]
-
-    if len(attempts) >= MAX_ATTEMPTS:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many login attempts. Try again after 15 minutes."
-        )
-
-    user = login(username, password)
-
-    if not user:
-
-        attempts.append(now)
-
-        login_attempts[key] = attempts
-
-        log_failed_login(
-            email=username,
-            ip_address=client_ip
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
-        )
-    if not user["is_active"]:
-        log_failed_login(
-            email=username,
-            ip_address=client_ip
-        )
-        
-        raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="User account is inactive"
-                )
-
-    login_attempts.pop(key, None)
-
-    access_token = create_access_token(
-        {
-            "sub": user["email"],
-            "role": user["role"].value,
-            "user_id": user["user_id"]
-        }
-    )
-
-    refresh_token = create_refresh_token(
-        {
-            "sub": user["email"],
-            "user_id": user["user_id"]
-        }
-    )
-    save_refresh_token(
-    user_id=user["user_id"],
-    token=refresh_token,
-    expires_at=datetime.now(timezone.utc) + timedelta(days=7)
-    )
-
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer"
-    }
-
-def login(username: str, password: str):
-
-    user = users.get(username)
-
-    if user is None:
-        return None
-
-    if not verify_password(password, user["password"]):
-        return None
-
-    return user
-
-@router.post(
-"/refresh",
-response_model=AccessTokenResponse
+router = APIRouter(
+    prefix="/api/v1/auth",
+    tags=["Authentication"]
 )
 
-def refresh_token(body: RefreshRequest):
+def get_client_ip(request: Request) -> str:
+# Only trust X-Forwarded-For when we are actually behind a proxy we control.
+# Otherwise any caller can forge it and reset their own rate-limit bucket.
+    if TRUST_PROXY:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+@router.post("/register")
+def register(
+    request: RegisterRequest,
+    db: Session = Depends(get_db)
+):
+    return register_user(db, request)
+
+@router.post(
+    "/login",
+    response_model=TokenResponse
+)
+def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    return login_user(
+        db=db,
+        username=form_data.username,
+        password=form_data.password,
+        client_ip=get_client_ip(request)
+    )
+@router.post(
+    "/refresh",
+    response_model=AccessTokenResponse
+)
+def refresh_token(
+    body: RefreshRequest,
+    db: Session = Depends(get_db)
+):
+    try:
+        payload = decode_token(body.refresh_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token"
+        )
+
+    if payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
     refresh = get_refresh_token(body.refresh_token)
 
     if refresh is None:
         raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or revoked refresh token"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked refresh token"
+        )
+
+    user = (
+        db.query(User)
+        .filter(User.id == payload.get("user_id"))
+        .first()
     )
 
-    try:
-        payload = decode_token(body.refresh_token)
-    except JWTError:
-       raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or expired refresh token"
-    )
-    if  payload.get("type") != "refresh":
+    if user is None or not user.is_active:
         raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid refresh token"
-    )
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user"
+        )
 
-    user = users.get(payload.get("sub"))
-
-    if user is None or not user["is_active"]:
+    if user.role is None:
         raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid user"
-    )
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User role has not been assigned"
+        )
 
     new_access_token = create_access_token(
         {
-            "sub": user["email"],
-            "user_id": user["user_id"],
-            "role": user["role"].value
+            "sub": user.email,
+            "user_id": user.id,
+            "role": user.role.name
         }
-)
+    )
 
     return {
-    "access_token": new_access_token,
-    "token_type": "bearer"
-}
+        "access_token": new_access_token,
+        "token_type": "bearer"
+    }
 
 @router.get("/me/permissions")
 def my_permissions(
@@ -242,6 +154,8 @@ def logout(body: LogoutRequest):
     return {
         "message": "Logged out successfully"
     }
+
+
 
 
 depen from fastapi import Depends, HTTPException, status
