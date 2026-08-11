@@ -1,3 +1,145 @@
+from sqlalchemy import Column, Integer, String
+from app.database import Base
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    name = Column(
+        String(50),
+        unique=True,
+        nullable=False,
+        index=True
+    )
+
+    description = Column(
+        String(255),
+        nullable=True
+    )
+    
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
+
+from app.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    email = Column(
+        String(255),
+        unique=True,
+        nullable=False,
+        index=True
+    )
+
+    full_name = Column(
+        String(255),
+        nullable=False
+    )
+
+    password = Column(
+        String(255),
+        nullable=False
+    )
+
+    role_id = Column(
+        Integer,
+        ForeignKey("roles.id"),
+        nullable=True
+    )
+
+    is_active = Column(
+        Boolean,
+        default=True,
+        nullable=False
+    )
+
+    role = relationship(
+        "Role",
+        backref="users"
+    )
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from app.database import Base
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    token = Column(
+        String(500),
+        unique=True,
+        nullable=False,
+        index=True
+    )
+
+    is_revoked = Column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+
+    created_at = Column(
+        DateTime,
+        nullable=False
+    )
+
+    expires_at = Column(
+        DateTime,
+        nullable=False
+    )
+
+
+from sqlalchemy import Column, DateTime, Integer, String
+from datetime import datetime
+
+from app.database import Base
+
+
+class FailedLoginAttempt(Base):
+    __tablename__ = "failed_login_attempts"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    email = Column(
+        String(255),
+        nullable=False,
+        index=True
+    )
+
+    ip_address = Column(
+        String(45),
+        nullable=False,
+        index=True
+    )
+
+    attempted_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        index=True
+    )
 from fastapi import (
     APIRouter,
     Depends,
