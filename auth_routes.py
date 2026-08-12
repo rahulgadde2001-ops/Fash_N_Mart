@@ -134,8 +134,14 @@ def seed_database():
         db.close()
 
 
+
 if __name__ == "__main__":
-    seed_database()from datetime import timedelta
+    # IMPORTANT:
+    # Create tables before querying/inserting roles and users.
+    Base.metadata.create_all(bind=engine)
+
+    seed_database()
+    from datetime import timedelta
 
 from fastapi.testclient import TestClient
 
