@@ -1,3 +1,62 @@
+Replace `tests/conftest.py` with this:
+
+```python
+ import os
+
+# ENVIRONMENT
+ # These must be set BEFORE any `app.*` import, because
+ # app/core/config.py reads os.environ at import time.
+
+os.environ["SECRET_KEY"] = "test-secret-key"
+
+# Use a dedicated test database so running the suite never
+ # touches (or seeds, or deletes rows from) a real dev database.
+
+os.environ["DATABASE_URL"] = "sqlite:///./test_platform.db"
+
+try:
+ from dotenv import load_dotenv
+ load_dotenv()
+ except ImportError:
+ pass
+
+import pytest
+
+from app.database import Base, engine
+ from app.seed import seed_database
+
+# DATABASE SETUP
+
+@pytest.fixture(scope="session", autouse=True)
+ def setup_test_database():
+ """
+ Give the suite a clean, seeded database.
+
+ Dropping first keeps the suite idempotent: tests that create
+ records (e.g. test_register_success) would otherwise fail on
+ the second run with "user already exists".
+ """
+
+ Base.metadata.drop_all(bind=engine)
+ Base.metadata.create_all(bind=engine)
+
+ seed_database()
+
+ yield
+
+ Base.metadata.drop_all(bind=engine)
+ ```
+
+Right now, `clear_failed_login_attempts()` in `test_auth.py:16` issues a `DELETE` against whatever `DATABASE_URL` happens to be pointing at, and `test_register_success` writes a real user into it. So today running `pytest` with a real dev database configured actually mutates it. `os.environ["DATABASE_URL"]` override in the conftest closes that off , suite now always runs against its own isolated `test_platform.db`.
+
+ the env vars have to be set *before* any `app.*` import, because `app/core/config.py` reads `os.environ` at module import time nd `app/database.py` binds the engine at import too so setting things after importing `app` would be too late. And dropping before creating is what makes the suite re runnable at all so without it, `test_register_success` registers `newregisteruser@company.com` on run 1 and gets a 400 on run 2 onward.
+
+One thing worth knowing Rahul wjich is you actually nearly had this already. `tests/test_auth.py:10-11` already contains:
+ ```python
+ if __name__ == "__main__":
+ seed_database()
+ ```
+ You'd correctly identified that seeding was needed and even wrote the call for it — the `if __name__ == "__main__"` guard is just never true when pytest imports the module, so it silently never fires. So the instinct and the mechanism were both right, just gated behind a condition that never triggers under pytest. Worth deleting those two lines once the conftest fixture is in, since they'll be genuinely dead code at that point.
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String,Text
 from sqlalchemy.sql import func
 
