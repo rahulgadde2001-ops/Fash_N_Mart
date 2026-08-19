@@ -676,8 +676,109 @@ def test_password_reset_flow():
         },
     )
 
+    from collections import defaultdict
+
+from fastapi import WebSocket
+
+
+class AlertConnectionManager:
+    def __init__(self):
+        self.connections: dict[int, list[WebSocket]] = defaultdict(list)
+
+    async def connect(
+        self,
+        user_id: int,
+        websocket: WebSocket,
+    ):
+        await websocket.accept()
+        self.connections[user_id].append(websocket)
+
+    def disconnect(
+        self,
+        user_id: int,
+        websocket: WebSocket,
+    ):
+        if user_id not in self.connections:
+            return
+
+        if websocket in self.connections[user_id]:
+            self.connections[user_id].remove(websocket)
+
+        if not self.connections[user_id]:
+            del self.connections[user_id]
+
+    async def send_to_user(
+        self,
+        user_id: int,
+        message: dict,
+    ):
+        connections = self.connections.get(user_id, [])
+
+        disconnected = []
+
+        for websocket in connections:
+            try:
+                await websocket.send_json(message)
+            except Exception:
+                disconnected.append(websocket)
+
+        for websocket in disconnected:
+            self.disconnect(user_id, websocket)
+
+
+alert_manager = AlertConnectionManager()
+
     assert response.status_code == 400
     assert (
         response.json()["detail"]
         == "Password reset token expired"
     )
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from app.core.security import decode_token
+from app.services.alert_service import alert_manager
+
+
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["Alerts"],
+)
+
+
+@router.websocket("/ws/alerts")
+async def alerts_websocket(
+    websocket: WebSocket,
+):
+    token = websocket.query_params.get("token")
+
+    if not token:
+        await websocket.close(code=1008)
+        return
+
+    try:
+        payload = decode_token(token)
+
+        user_id = payload.get("user_id")
+
+        if not user_id:
+            await websocket.close(code=1008)
+            return
+
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
+    await alert_manager.connect(
+        user_id=int(user_id),
+        websocket=websocket,
+    )
+
+    try:
+        while True:
+            await websocket.receive_text()
+
+    except WebSocketDisconnect:
+        alert_manager.disconnect(
+            user_id=int(user_id),
+            websocket=websocket,
+        )
