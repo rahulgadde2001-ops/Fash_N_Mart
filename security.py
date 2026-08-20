@@ -1,784 +1,1499 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.sql import func
+'''from fastapi.testclient import TestClient
+from app.main import app
+from app.services.auth_service import login_attempts
+from app.core.security import create_access_token
+from datetime import timedelta
 
-from app.database import Base
+client = TestClient(app)
 
 
-class AuditLog(Base):
-    __tablename__ = "audit_logs"
+def clear_attempts():
+    login_attempts.clear()
 
-    id = Column(Integer, primary_key=True, index=True)
 
-    user_id = Column(
-        Integer,
-        ForeignKey("users.id"),
-        nullable=True,
-        index=True,
-    )
-
-    event_type = Column(
-        String(100),
-        nullable=False,
-        index=True,
-    )
-
-    ip_address = Column(
-        String(45),
-        nullable=True,
-    )
-
-    details = Column(
-        Text,
-        nullable=True,
-    )
-
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=func.now(),
-        index=True,
+def login_as_ceo():
+    return client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "ceo@company.com",
+            "password": "ceocompany@123"
+        }
     )
 
 
-from sqlalchemy.orm import Session
+def test_root():
+    response = client.get("/")
 
-from app.models.audit_log import AuditLog
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Platform Service is running"
+    }
 
+
+def test_login_success():
+    clear_attempts()
+
+    response = login_as_ceo()
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert "access_token" in body
+    assert "refresh_token" in body
+    assert body["token_type"] == "bearer"
+
+
+def test_invalid_password():
+    clear_attempts()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "ceo@company.com",
+            "password": "wrongpassword"
+        }
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
+
+
+def test_invalid_user():
+    clear_attempts()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "unknown@company.com",
+            "password": "password123"
+        }
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
+
+
+def test_current_user():
+    clear_attempts()
+
+    login = login_as_ceo()
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/users/me",
+        headers={
+            "Authorization": f"Bearer {token}"
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.json()["email"] == "ceo@company.com"
+
+
+def test_current_user_without_token():
+    response = client.get("/api/v1/users/me")
+
+    assert response.status_code == 401
+
+
+def test_admin_access_allowed():
+    clear_attempts()
+
+    login = login_as_ceo()
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/test",
+        headers={
+            "Authorization": f"Bearer {token}"
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Admin access granted"
+
+
+def test_admin_access_forbidden():
+    clear_attempts()
+
+    login = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "supplier@company.com",
+            "password": "supplier@123"
+        }
+    )
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/test",
+        headers={
+            "Authorization": f"Bearer {token}"
+        }
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Forbidden: insufficient permissions"
+
+
+def test_login_rate_limit():
+    clear_attempts()
+
+    for _ in range(5):
+        client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "ceo@company.com",
+                "password": "wrongpassword"
+            }
+        )
+
+    response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "ceo@company.com",
+            "password": "wrongpassword"
+        }
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "Too many login attempts. Try again after 15 minutes."
+
+
+def test_expired_token():
+    clear_attempts()
+
+    expired_token = create_access_token(
+        {
+            "sub": "ceo@company.com",
+            "role": "ceo",
+            "user_id": 1
+        },
+        expires_delta=timedelta(minutes=-1)
+    )
+
+    response = client.get(
+        "/api/v1/users/me",
+        headers={
+            "Authorization": f"Bearer {expired_token}"
+        }
+    )
+    assert response.status_code == 401
+
+def test_tampered_token():
+    clear_attempts()
+
+    login = login_as_ceo()
+
+    token = login.json()["access_token"]
+
+    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+
+    response = client.get(
+        "/api/v1/users/me",
+        headers={
+            "Authorization": f"Bearer {tampered}"
+        }
+    )
+    assert response.status_code == 401
+
+def test_refresh_success():
+    clear_attempts()
+
+    login = login_as_ceo()
+    refresh = login.json()["refresh_token"]
+    response = client.post(
+       "/api/v1/auth/refresh",
+       json={"refresh_token": refresh}
+    )
+    assert response.status_code == 200
+    assert response.json()["token_type"] == "bearer"
+
+    new_token=response.json()["access_token"]
+
+
+    me=client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {new_token}"}
+    )
+    assert me.status_code == 200
+    assert me.json()["email"] == "ceo@company.com"
+
+def test_refresh_with_access_token_rejected():
+    clear_attempts()
+    login = login_as_ceo()
+    access = login.json()["access_token"]
+    response = client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": access}
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid refresh token"
+
+def test_refresh_with_garbage_token_returns_401():
+    response = client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": "not.a.real.token"}
+    )
+    assert response.status_code == 401
+
+def test_rate_limit_does_not_lock_out_other_users():
+    clear_attempts()
+    for _ in range(5):
+        client.post(
+           "/api/v1/auth/login",
+            data={
+            "username": "ceo@company.com",
+            "password": "wrongpassword"
+        }
+    )
+    response = client.post(
+    "/api/v1/auth/login",
+    data={
+    "username": "analyst@company.com",
+    "password": "analyst@123"
+    }
+)
+    assert response.status_code == 200
+
+
+def test_logout_revokes_refresh_token():
+    clear_attempts()
+
+    login = login_as_ceo()
+    refresh = login.json()["refresh_token"]
+
+    logout = client.post(
+        "/api/v1/auth/logout",
+        json={
+            "refresh_token": refresh
+        }
+    )
+
+    assert logout.status_code == 200
+
+    response = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": refresh
+        }
+    )
+
+    assert response.status_code == 401
+
+
+def test_ceo_has_vp_permissions():
+    clear_attempts()
+
+    login = login_as_ceo()
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/auth/me/permissions",
+        headers={
+            "Authorization": f"Bearer {token}"
+        }
+    )
+
+    assert response.status_code == 200
+
+    permissions = response.json()["permissions"]
+
+    assert "vp_operations" in permissions
+
+def test_register_success():
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "newuser@company.com",
+            "full_name": "New User",
+            "password": "StrongPassword@123",
+        }
+    )
+
+    assert response.status_code == 200
+
+def test_register_weak_password():
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "weak@company.com",
+            "full_name": "Weak User",
+            "password": "weak123",
+        }
+    )
+
+    assert response.status_code == 400
+
+def test_register_password_without_number():
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "nonumber@company.com",
+            "full_name": "No Number",
+            "password": "StrongPassword@"
+        }
+    )
+
+    assert response.status_code == 400
+
+def test_register_password_without_special_character():
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "nospecial@company.com",
+            "full_name": "No Special",
+            "password": "StrongPassword123"
+        }
+    )
+
+    assert response.status_code == 400'''
+
+
+from datetime import timedelta
+from fastapi.testclient import TestClient
+from app.main import app
+from app.seed import seed_database
+from app.models.failed_login_attempts import FailedLoginAttempt
+from app.core.security import create_access_token
+from app.database import SessionLocal
+client = TestClient(app)
+
+# ============================================================
+# TEST HELPERS
+# ============================================================
+
+def clear_failed_login_attempts():
+    
+    db =SessionLocal()
+
+    try:
+        db.query(FailedLoginAttempt).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def login_as_ceo():
+    return client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "ceo@company.com",
+            "password": "ceocompany@123",
+        },
+    )
+
+# ============================================================
+# ROOT
+# ============================================================
+
+def test_root():
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Platform Service is running"
+    }
+
+# ============================================================
+# LOGIN
+# ============================================================
+
+def test_login_success():
+    clear_failed_login_attempts()
+
+    response = login_as_ceo()
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert "access_token" in body
+    assert "refresh_token" in body
+    assert body["token_type"] == "bearer"
+
+
+def test_invalid_password():
+    clear_failed_login_attempts()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "ceo@company.com",
+            "password": "wrongpassword",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
+
+def test_invalid_user():
+    clear_failed_login_attempts()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "unknown@company.com",
+            "password": "password123",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
+
+# ============================================================
+# CURRENT USER
+# ============================================================
+
+def test_current_user():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/users/me",
+        headers={
+            "Authorization": f"Bearer {token}"
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["email"] == "ceo@company.com"
+
+def test_current_user_without_token():
+    response = client.get("/api/v1/users/me")
+
+    assert response.status_code == 401
+
+
+# ============================================================
+# RBAC
+# ============================================================
+
+def test_admin_access_allowed():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/test",
+        headers={
+            "Authorization": f"Bearer {token}"
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Admin access granted"
+
+
+def test_admin_access_forbidden():
+    clear_failed_login_attempts()
+
+    login = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "supplier@company.com",
+            "password": "supplier@123",
+        },
+    )
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/test",
+        headers={
+            "Authorization": f"Bearer {token}"
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Forbidden: insufficient permissions"
+    )
+
+# ============================================================
+# DB-BACKED RATE LIMITING
+# ============================================================
+
+def test_login_rate_limit_per_email():
+
+    clear_failed_login_attempts()
+
+    for _ in range(5):
+        response = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "ceo@company.com",
+                "password": "wrongpassword",
+            },
+        )
+
+        assert response.status_code == 401
+
+    response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "ceo@company.com",
+            "password": "wrongpassword",
+        },
+    )
+
+    assert response.status_code == 429
+
+    assert response.json()["detail"] == (
+        "Too many login attempts. "
+        "Try again after 15 minutes."
+    )
+
+
+def test_login_rate_limit_per_ip():
+
+    clear_failed_login_attempts()
+
+    for index in range(5):
+        response = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": f"unknown{index}@company.com",
+                "password": "wrongpassword",
+            },
+        )
+
+        assert response.status_code == 401
+
+    response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "anotherunknown@company.com",
+            "password": "wrongpassword",
+        },
+    )
+
+    assert response.status_code == 429
+
+    assert response.json()["detail"] == (
+        "Too many login attempts. "
+        "Try again after 15 minutes."
+    )
+
+
+# ============================================================
+# PASSWORD POLICY / REGISTRATION
+# ============================================================
+
+def test_register_success():
+
+    clear_failed_login_attempts()
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "newregisteruser@company.com",
+            "full_name": "New Register User",
+            "password": "NewRegister@123"
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "User registered successfully"
+
+
+def test_register_weak_password():
+
+    clear_failed_login_attempts()
+
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "weakuser@company.com",
+            "full_name": "Weak User",
+            "password": "weak123",
+        },
+    )
+
+    assert response.status_code == 400
+
+
+# ============================================================
+# JWT
+# ============================================================
+
+def test_expired_token():
+    clear_failed_login_attempts()
+
+    expired_token = create_access_token(
+        {
+            "sub": "ceo@company.com",
+            "role": "ceo",
+            "user_id": 1,
+        },
+        expires_delta=timedelta(minutes=-1),
+    )
+
+    response = client.get(
+        "/api/v1/users/me",
+        headers={
+            "Authorization": f"Bearer {expired_token}"
+        },
+    )
+
+    assert response.status_code == 401
+
+
+def test_tampered_token():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+
+    tampered = (
+        token[:-1]
+        + ("A" if token[-1] != "A" else "B")
+    )
+
+    response = client.get(
+        "/api/v1/users/me",
+        headers={
+            "Authorization": f"Bearer {tampered}"
+        },
+    )
+
+    assert response.status_code == 401
+
+
+# ============================================================
+# REFRESH TOKEN
+# ============================================================
+
+def test_refresh_success():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    refresh = login.json()["refresh_token"]
+
+    response = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": refresh
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["token_type"] == "bearer"
+
+    new_token = response.json()["access_token"]
+
+    me = client.get(
+        "/api/v1/users/me",
+        headers={
+            "Authorization": f"Bearer {new_token}"
+        },
+    )
+
+    assert me.status_code == 200
+    assert me.json()["email"] == "ceo@company.com"
+
+
+def test_refresh_with_access_token_rejected():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    access = login.json()["access_token"]
+
+    response = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": access
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid refresh token"
+
+
+def test_refresh_with_garbage_token_returns_401():
+    clear_failed_login_attempts()
+
+    response = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": "not.a.real.token"
+        },
+    )
+
+    assert response.status_code == 401
+
+
+# ============================================================
+# LOGOUT / REFRESH TOKEN REVOCATION
+# ============================================================
+
+def test_logout_revokes_refresh_token():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    refresh = login.json()["refresh_token"]
+
+    logout = client.post(
+        "/api/v1/auth/logout",
+        json={
+            "refresh_token": refresh
+        },
+    )
+
+    assert logout.status_code == 200
+
+    response = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": refresh
+        },
+    )
+
+    assert response.status_code == 401
+
+
+# ============================================================
+# ROLE HIERARCHY
+# ============================================================
+
+def test_ceo_has_vp_permissions():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/auth/me/permissions",
+        headers={
+            "Authorization": f"Bearer {token}"
+        },
+    )
+    assert response.status_code == 200
+    permissions = response.json()["permissions"]
+    assert "vp_operations" in permissions
+
+def test_refresh_token_replay_attack():
+    client = TestClient(app)
+    # Login and obtain the original refresh token (Token A)
+    login_response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "ceo@company.com",
+            "password": "ceocompany@123",
+        },
+    )
+
+    assert login_response.status_code == 200
+
+    token_a = login_response.json()["refresh_token"]
+
+    # First use of Token A should succeed.
+    first_refresh_response = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": token_a,
+        },
+    )
+
+    assert first_refresh_response.status_code == 200
+
+    response_data = first_refresh_response.json()
+
+    assert "access_token" in response_data
+    assert "refresh_token" in response_data
+
+    # A new refresh token (Token B) should have been issued.
+    token_b = response_data["refresh_token"]
+
+    assert token_b != token_a
+
+    # Replay Token A.
+    replay_response = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": token_a,
+        },
+    )
+
+    # Token A was rotated/revoked, so replay must fail.
+    assert replay_response.status_code == 401
+
+    assert replay_response.json()["detail"] == (
+        "Invalid or revoked refresh token"
+    )
+
+def test_ceo_can_access_vp_level_admin_endpoint():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/users",
+        headers={
+            "Authorization": f"Bearer {token}"
+        },
+    )
+
+    assert response.status_code == 200
+
+
+def test_supplier_cannot_access_admin_users():
+    clear_failed_login_attempts()
+
+    login = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "supplier@company.com",
+            "password": "supplier@123",
+        },
+    )
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/users",
+        headers={
+            "Authorization": f"Bearer {token}"
+        },
+    )
+
+    assert response.status_code == 403
+
+def test_ceo_has_all_lower_role_permissions():
+    clear_failed_login_attempts()
+
+    login = login_as_ceo()
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+
+    response = client.get(
+        "/api/v1/auth/me/permissions",
+        headers={
+            "Authorization": f"Bearer {token}"
+        },
+    )
+
+    assert response.status_code == 200
+
+    permissions = response.json()["permissions"]
+
+    assert "ceo" in permissions
+    assert "vp_operations" in permissions
+    assert "procurement_manager" in permissions
+    assert "logistics_manager" in permissions
+    assert "compliance_officer" in permissions
+    assert "warehouse_manager" in permissions
+    assert "analyst" in permissions
+    assert "supplier" in permissions
+
+
+# ============================================================
+# R4 TEST HELPERS
+# ============================================================
+
+def login_as(email: str, password: str):
+    response = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": email,
+            "password": password,
+        },
+    )
+
+    assert response.status_code == 200
+    return response.json()
+
+
+def auth_header(token: str):
+    return {
+        "Authorization": f"Bearer {token}"
+    }
+
+
+def get_user_id_by_email(token: str, email: str):
+    response = client.get(
+        "/api/v1/admin/users",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+
+    users = response.json()
+
+    user = next(
+        user
+        for user in users
+        if user["email"] == email
+    )
+
+    return user["user_id"]
+
+
+# ============================================================
+# R4-1: ADMIN USER MANAGEMENT
+# ============================================================
+
+def test_r4_ceo_can_list_users():
+    login = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/users",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_r4_vp_operations_can_list_users():
+    login = login_as(
+        "vpoperations@company.com",
+        "vpoperations@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/users",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_r4_create_user_by_ceo():
+    login = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.post(
+        "/api/v1/admin/users",
+        headers=auth_header(token),
+        json={
+            "email": "r4_create_user@company.com",
+            "full_name": "R4 Create User",
+            "password": "CreateUser@12345",
+            "role": "analyst",
+        },
+    )
+
+    assert response.status_code in (200, 201)
+
+    body = response.json()
+
+    assert body["email"] == "r4_create_user@company.com"
+    assert body["full_name"] == "R4 Create User"
+    assert body["role"] == "analyst"
+    assert body["is_active"] is True
+
+
+def test_r4_deactivate_user_by_ceo():
+    login = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    token = login["access_token"]
+
+    # Create a dedicated test user.
+    create_response = client.post(
+        "/api/v1/admin/users",
+        headers=auth_header(token),
+        json={
+            "email": "r4_deactivate_user@company.com",
+            "full_name": "R4 Deactivate User",
+            "password": "DeactivateUser@12345",
+            "role": "analyst",
+        },
+    )
+
+    assert create_response.status_code in (200, 201)
+
+    user_id = create_response.json()["user_id"]
+
+    response = client.patch(
+        f"/api/v1/admin/users/{user_id}/deactivate",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["user_id"] == user_id
+    assert body["is_active"] is False
+
+
+def test_r4_non_admin_cannot_deactivate_user():
+    login = login_as(
+        "supplier@company.com",
+        "supplier@123",
+    )
+
+    token = login["access_token"]
+
+    # Any existing user ID is enough because authorization
+    # should be checked before the target-user operation.
+    response = client.patch(
+        "/api/v1/admin/users/1/deactivate",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 403
+
+
+def test_r4_admin_can_force_reset_password():
+    login = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    token = login["access_token"]
+
+    # IMPORTANT:
+    # Do not reset CEO's own password.
+    # Create a dedicated target user instead.
+    create_response = client.post(
+        "/api/v1/admin/users",
+        headers=auth_header(token),
+        json={
+            "email": "r4_reset_user@company.com",
+            "full_name": "R4 Reset User",
+            "password": "OldPassword@12345",
+            "role": "analyst",
+        },
+    )
+
+    assert create_response.status_code in (200, 201)
+
+    user_id = create_response.json()["user_id"]
+
+    response = client.post(
+        f"/api/v1/admin/users/{user_id}/force-reset-password",
+        headers=auth_header(token),
+        json={
+            "new_password": "NewPassword@12345",
+        },
+    )
+
+    assert response.status_code == 200
+
+    assert response.json()["message"] == (
+        "Password reset successfully"
+    )
+
+
+def test_r4_non_admin_cannot_force_reset_password():
+    login = login_as(
+        "supplier@company.com",
+        "supplier@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.post(
+        "/api/v1/admin/users/1/force-reset-password",
+        headers=auth_header(token),
+        json={
+            "new_password": "NewPassword@12345",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_r4_admin_can_view_role_change_history():
+    login = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    token = login["access_token"]
+
+    ceo_id = get_user_id_by_email(
+        token,
+        "ceo@company.com",
+    )
+
+    response = client.get(
+        f"/api/v1/admin/users/{ceo_id}/role-history",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_r4_non_admin_cannot_view_role_change_history():
+    login = login_as(
+        "supplier@company.com",
+        "supplier@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/users/1/role-history",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 403
+
+
+# ============================================================
+# R4-2: PER-SESSION MANAGEMENT
+# ============================================================
+
+def test_r4_admin_can_list_user_sessions():
+    login = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    token = login["access_token"]
+
+    ceo_id = get_user_id_by_email(
+        token,
+        "ceo@company.com",
+    )
+
+    response = client.get(
+        f"/api/v1/admin/users/{ceo_id}/sessions",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+
+    sessions = response.json()
+
+    assert isinstance(sessions, list)
+
+    if sessions:
+        session = sessions[0]
+
+        assert "id" in session
+        assert "user_id" in session
+        assert "created_at" in session
+        assert "expires_at" in session
+        assert "is_revoked" in session
+
+
+def test_r4_multiple_logins_create_multiple_sessions():
+    login1 = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    login2 = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    assert login1["refresh_token"] != login2["refresh_token"]
+
+    token = login1["access_token"]
+
+    ceo_id = get_user_id_by_email(
+        token,
+        "ceo@company.com",
+    )
+
+    response = client.get(
+        f"/api/v1/admin/users/{ceo_id}/sessions",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+
+    sessions = response.json()
+
+    assert len(sessions) >= 2
+
+
+def test_r4_admin_can_revoke_user_session():
+    login1 = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    login2 = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    token = login1["access_token"]
+
+    ceo_id = get_user_id_by_email(
+        token,
+        "ceo@company.com",
+    )
+
+    sessions_response = client.get(
+        f"/api/v1/admin/users/{ceo_id}/sessions",
+        headers=auth_header(token),
+    )
+
+    assert sessions_response.status_code == 200
+
+    sessions = sessions_response.json()
+
+    assert len(sessions) >= 2
+
+    session_id = sessions[-1]["id"]
+
+    response = client.delete(
+        f"/api/v1/admin/users/{ceo_id}/sessions/{session_id}",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+
+    assert response.json()["message"] == (
+        "Session revoked successfully"
+    )
+
+
+def test_r4_revoked_session_cannot_be_refreshed():
+    login = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    access_token = login["access_token"]
+    refresh_token = login["refresh_token"]
+
+    ceo_id = get_user_id_by_email(
+        access_token,
+        "ceo@company.com",
+    )
+
+    sessions_response = client.get(
+        f"/api/v1/admin/users/{ceo_id}/sessions",
+        headers=auth_header(access_token),
+    )
+
+    assert sessions_response.status_code == 200
+
+    sessions = sessions_response.json()
+
+    assert sessions
+
+    # The session endpoint does not expose the refresh token.
+    # The newest session belongs to the login above.
+    session_id = max(
+        sessions,
+        key=lambda session: session["id"],
+    )["id"]
+
+    revoke_response = client.delete(
+        f"/api/v1/admin/users/{ceo_id}/sessions/{session_id}",
+        headers=auth_header(access_token),
+    )
+
+    assert revoke_response.status_code == 200
+
+    refresh_response = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": refresh_token,
+        },
+    )
+
+    assert refresh_response.status_code == 401
+
+
+def test_r4_non_admin_cannot_list_user_sessions():
+    login = login_as(
+        "supplier@company.com",
+        "supplier@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/users/1/sessions",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 403
+
+
+# ============================================================
+# R4-3: ROLE HIERARCHY EDGE CASES
+# ============================================================
+
+def test_r4_ceo_has_lower_role_permissions():
+    login = login_as(
+        "ceo@company.com",
+        "ceocompany@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.get(
+        "/api/v1/auth/me/permissions",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+
+    permissions = response.json()["permissions"]
+
+    assert "ceo" in permissions
+    assert "vp_operations" in permissions
+
+
+def test_r4_vp_does_not_have_ceo_permission():
+    login = login_as(
+        "vpoperations@company.com",
+        "vpoperations@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.get(
+        "/api/v1/auth/me/permissions",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+
+    permissions = response.json()["permissions"]
+
+    assert "vp_operations" in permissions
+    assert "ceo" not in permissions
+
+
+def test_r4_supplier_does_not_have_higher_permissions():
+    login = login_as(
+        "supplier@company.com",
+        "supplier@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.get(
+        "/api/v1/auth/me/permissions",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+
+    permissions = response.json()["permissions"]
+
+    assert "supplier" in permissions
+    assert "ceo" not in permissions
+    assert "vp_operations" not in permissions
+
+
+def test_r4_supplier_cannot_access_admin_users():
+    login = login_as(
+        "supplier@company.com",
+        "supplier@123",
+    )
+
+    token = login["access_token"]
+
+    response = client.get(
+        "/api/v1/admin/users",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 403
+emailserv
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+
+class MockEmailService:
+
+    @staticmethod
+    def send_password_reset_email(
+        email: str,
+        reset_token: str,
+    ) -> None:
+        logger.info(
+            "MOCK PASSWORD RESET EMAIL | "
+            "recipient=%s | reset_token=%s",
+            email,
+            reset_token,
+        )
+    audit serv
+    from sqlalchemy.orm import Session
+
+from app.models.auth_audit_logs import AuthAuditLog
 
 LOGIN_SUCCESS = "LOGIN_SUCCESS"
 LOGIN_FAILED = "LOGIN_FAILED"
 ROLE_CHANGED = "ROLE_CHANGED"
 TOKEN_REVOKED = "TOKEN_REVOKED"
-USER_CREATED = "USER_CREATED"
-USER_DEACTIVATED = "USER_DEACTIVATED"
-PASSWORD_FORCE_RESET = "PASSWORD_FORCE_RESET"
-
 
 def create_audit_log(
     db: Session,
     event_type: str,
     ip_address: str | None = None,
     user_id: int | None = None,
+    email: str | None = None,
     details: str | None = None,
-) -> AuditLog:
-
-    audit = AuditLog(
-        user_id=user_id,
+):
+    audit = AuthAuditLog(
         event_type=event_type,
+        user_id=user_id,
+        email=email.lower() if email else None,
         ip_address=ip_address,
         details=details,
     )
 
     db.add(audit)
     db.commit()
-    db.refresh(audit)
 
     return audit
-
-
-admin.py
-from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict, EmailStr
-
-
-class AdminUserCreate(BaseModel):
-    email: EmailStr
-    password: str
-    role: str
-
-
-class AdminUserResponse(BaseModel):
-    id: int
-    email: EmailStr
-    role: str
-    is_active: bool
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class ForceResetPasswordRequest(BaseModel):
-    new_password: str
-
-
-class RoleChangeRequest(BaseModel):
-    new_role: str
-
-
-class SessionResponse(BaseModel):
-    id: int
-    user_id: int
-    created_at: datetime
-    expires_at: datetime
-    is_revoked: bool
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class RoleHistoryResponse(BaseModel):
-    id: int
-    user_id: int
-    old_role: str
-    new_role: str
-    changed_by: int
-    ip_address: str | None
-    changed_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class AuditLogResponse(BaseModel):
-    id: int
-    user_id: int | None
-    event_type: str
-    ip_address: str | None
-    details: str | None
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-user serv 
-from sqlalchemy.orm import Session
-
-from app.core.password_validator import validate_password
-from app.core.security import hash_password
-from app.models.refresh_token import RefreshToken
-from app.models.role_history import RoleChangeHistory
-from app.models.user import User
-from app.services.audit_service import (
-    PASSWORD_FORCE_RESET,
-    ROLE_CHANGED,
-    USER_CREATED,
-    USER_DEACTIVATED,
-    create_audit_log,
-)
-
-
-def get_users(db: Session):
-    return db.query(User).all()
-
-
-def get_user(db: Session, user_id: int):
-    return (
-        db.query(User)
-        .filter(User.id == user_id)
-        .first()
-    )
-
-
-def create_user(
-    db: Session,
-    email: str,
-    password: str,
-    role: str,
-    ip_address: str | None,
-):
-    existing = (
-        db.query(User)
-        .filter(User.email == email.lower())
-        .first()
-    )
-
-    if existing:
-        raise ValueError("User already exists")
-
-    validate_password(password)
-
-    user = User(
-        email=email.lower(),
-        password_hash=hash_password(password),
-        role=role,
-        is_active=True,
-    )
-
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    create_audit_log(
-        db=db,
-        event_type=USER_CREATED,
-        user_id=user.id,
-        ip_address=ip_address,
-        details=f"User created with role {role}",
-    )
-
-    return user
-
-
-def deactivate_user(
-    db: Session,
-    user_id: int,
-    ip_address: str | None,
-):
-    user = get_user(db, user_id)
-
-    if not user:
-        raise ValueError("User not found")
-
-    user.is_active = False
-
-    # Deactivate all refresh-token sessions.
-    db.query(RefreshToken).filter(
-        RefreshToken.user_id == user_id,
-        RefreshToken.is_revoked.is_(False),
-    ).update(
-        {"is_revoked": True},
-        synchronize_session=False,
-    )
-
-    db.commit()
-
-    create_audit_log(
-        db=db,
-        event_type=USER_DEACTIVATED,
-        user_id=user.id,
-        ip_address=ip_address,
-        details="User deactivated and active sessions revoked",
-    )
-
-    db.refresh(user)
-
-    return user
-
-
-def force_reset_password(
-    db: Session,
-    user_id: int,
-    new_password: str,
-    ip_address: str | None,
-):
-    user = get_user(db, user_id)
-
-    if not user:
-        raise ValueError("User not found")
-
-    validate_password(new_password)
-
-    user.password_hash = hash_password(new_password)
-
-    # Force-reset should invalidate existing sessions.
-    db.query(RefreshToken).filter(
-        RefreshToken.user_id == user_id,
-        RefreshToken.is_revoked.is_(False),
-    ).update(
-        {"is_revoked": True},
-        synchronize_session=False,
-    )
-
-    db.commit()
-
-    create_audit_log(
-        db=db,
-        event_type=PASSWORD_FORCE_RESET,
-        user_id=user.id,
-        ip_address=ip_address,
-        details="Password force-reset by administrator",
-    )
-
-    return user
-
-
-def change_user_role(
-    db: Session,
-    user_id: int,
-    new_role: str,
-    changed_by: int,
-    ip_address: str | None,
-):
-    user = get_user(db, user_id)
-
-    if not user:
-        raise ValueError("User not found")
-
-    old_role = user.role
-
-    if old_role == new_role:
-        raise ValueError("User already has this role")
-
-    user.role = new_role
-
-    history = RoleChangeHistory(
-        user_id=user.id,
-        old_role=old_role,
-        new_role=new_role,
-        changed_by=changed_by,
-        ip_address=ip_address,
-    )
-
-    db.add(history)
-    db.commit()
-    db.refresh(user)
-
-    create_audit_log(
-        db=db,
-        event_type=ROLE_CHANGED,
-        user_id=user.id,
-        ip_address=ip_address,
-        details=(
-            f"Role changed from {old_role} "
-            f"to {new_role} by user {changed_by}"
-        ),
-    )
-
-    return user
-
-@router.get(
-    "/audit-logs",
-    response_model=list[AuditLogResponse],
-)
-def get_audit_logs(
-    user_id: int | None = Query(default=None),
-    event_type: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    ensure_admin(current_user)
-
-    query = db.query(AuditLog)
-
-    if user_id is not None:
-        query = query.filter(
-            AuditLog.user_id == user_id
-        )
-
-    if event_type is not None:
-        query = query.filter(
-            AuditLog.event_type == event_type
-        )
-
-    return (
-        query
-        .order_by(AuditLog.created_at.desc())
-        .limit(500)
-        .all()
-    )
-
-from datetime import datetime
-
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
-from sqlalchemy.orm import Column, relationship
-
-from app.database import Base
-
-
-class PasswordResetToken(Base):
-    __tablename__ = "password_reset_tokens"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    user_id = Column(
-        Integer,
-        ForeignKey("users.id"),
-        nullable=False,
-        index=True,
-    )
-
-    token = Column(
-        String(255),
-        unique=True,
-        nullable=False,
-        index=True,
-    )
-
-    expires_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-    )
-
-    used = Column(
-        Boolean,
-        default=False,
-        nullable=False,
-    )
-
-    created_at = Column(
-        DateTime(timezone=True),
-        default=datetime.utcnow,
-        nullable=False,
-    )
-
-    user = relationship("User")
-
-    uthach
-    class PasswordResetRequest(BaseModel):
-    email: EmailStr
-
-
-class PasswordResetConfirmRequest(BaseModel):
-    token: str
-    new_password: str
-
-
-class PasswordResetResponse(BaseModel):
-    message: str
-paswd seev
-import secrets
-from datetime import datetime, timedelta, timezone
-
-from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
-
-from app.core.password_validator import validate_password
-from app.core.security import hash_password
-from app.models.password_reset_token import PasswordResetToken
-from app.models.users import User
-from app.services.audit_service import (
-    create_audit_log,
-    PASSWORD_RESET,
-)
-
-
-RESET_TOKEN_EXPIRE_MINUTES = 15
-
-
-def request_password_reset(
-    db: Session,
-    email: str,
-):
-    email = email.lower()
-
-    user = (
-        db.query(User)
-        .filter(User.email == email)
-        .first()
-    )
-
-    # Do not reveal whether the email exists.
-    if user is None:
-        return
-
-
-    token = secrets.token_urlsafe(32)
-
-    expires_at = (
-        datetime.now(timezone.utc)
-        + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES)
-    )
-
-    reset_token = PasswordResetToken(
-        user_id=user.id,
-        token=token,
-        expires_at=expires_at,
-        used=False,
-    )
-
-    db.add(reset_token)
-
-    db.commit()
-
-    # Mock email for this round.
-    print(
-        f"[MOCK EMAIL] Password reset token "
-        f"for {user.email}: {token}"
-    )
-
-
-def reset_password(
-    db: Session,
-    token: str,
-    new_password: str,
-):
-    reset_token = (
-        db.query(PasswordResetToken)
-        .filter(
-            PasswordResetToken.token == token
-        )
-        .first()
-    )
-
-    if reset_token is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid password reset token",
-        )
-
-    if reset_token.used:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password reset token already used",
-        )
-
-    now = datetime.now(timezone.utc)
-
-    if reset_token.expires_at <= now:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password reset token expired",
-        )
-
-    user = (
-        db.query(User)
-        .filter(User.id == reset_token.user_id)
-        .first()
-    )
-
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid password reset token",
-        )
-
-    validate_password(new_password)
-
-    user.password = hash_password(new_password)
-
-    # Single-use enforcement.
-    reset_token.used = True
-
-    create_audit_log(
-        db=db,
-        event_type=PASSWORD_RESET,
-        user_id=user.id,
-        email=user.email,
-        details="Password reset completed",
-    )
-
-    db.commit()
-
-auth routes@router.post(
-    "/password-reset/request",
-    response_model=PasswordResetResponse,
-)
-def request_reset(
-    body: PasswordResetRequest,
-    db: Session = Depends(get_db),
-):
-    request_password_reset(
-        db=db,
-        email=body.email,
-    )
-
-    return {
-        "message": (
-            "If the email exists, "
-            "a password reset token has been sent."
-        )
-    }
-
-After:
-user.password = hash_password(new_password)
-revoke the user's existing refresh tokens:
-from app.models.refresh_token import RefreshToken
-
-db.query(RefreshToken).filter(
-    RefreshToken.user_id == user.id,
-    RefreshToken.is_revoked.is_(False),
-).update(
-    {
-        RefreshToken.is_revoked: True
-    },
-    synchronize_session=False,
-)
-Then:
-reset_token.used = True
-This means:
-password reset
-      ↓
-old sessions revoked
-      ↓
-old refresh tokens cannot create access tokens
-def test_password_reset_flow():
-    clear_failed_login_attempts()
-
-    request = client.post(
-        "/api/v1/auth/password-reset/request",
-        json={
-            "email": "ceo@company.com",
-        },
-    )
-
-    assert request.status_code == 200
-    def test_password_reset_token_single_use():
-    client.post(
-        "/api/v1/auth/password-reset/request",
-        json={
-            "email": "ceo@company.com",
-        },
-    )
-
-    db = SessionLocal()
-
-    try:
-        reset_token = (
-            db.query(PasswordResetToken)
-            .order_by(
-                PasswordResetToken.created_at.desc()
-            )
-            .first()
-        )
-
-        token = reset_token.token
-
-    finally:
-        db.close()
-
-    first = client.post(
-        "/api/v1/auth/password-reset/confirm",
-        json={
-            "token": token,
-            "new_password": "NewPassword@12345",
-        },
-    )
-
-    assert first.status_code == 200
-
-    second = client.post(
-        "/api/v1/auth/password-reset/confirm",
-        json={
-            "token": token,
-            "new_password": "AnotherPassword@12345",
-        },
-    )
-
-    assert second.status_code == 400
-    assert (
-        second.json()["detail"]
-        == "Password reset token already used"
-    )
-    def test_password_reset_token_expired():
-    from datetime import datetime, timedelta, timezone
-
-    db = SessionLocal()
-
-    try:
-        user = (
-            db.query(User)
-            .filter(
-                User.email == "ceo@company.com"
-            )
-            .first()
-        )
-
-        token = PasswordResetToken(
-            user_id=user.id,
-            token="expired-test-token",
-            expires_at=(
-                datetime.now(timezone.utc)
-                - timedelta(minutes=1)
-            ),
-            used=False,
-        )
-
-        db.add(token)
-        db.commit()
-
-    finally:
-        db.close()
-
-    response = client.post(
-        "/api/v1/auth/password-reset/confirm",
-        json={
-            "token": "expired-test-token",
-            "new_password": "NewPassword@12345",
-        },
-    )
-
-    from collections import defaultdict
-
-from fastapi import WebSocket
-
-
-class AlertConnectionManager:
-    def __init__(self):
-        self.connections: dict[int, list[WebSocket]] = defaultdict(list)
-
-    async def connect(
-        self,
-        user_id: int,
-        websocket: WebSocket,
-    ):
-        await websocket.accept()
-        self.connections[user_id].append(websocket)
-
-    def disconnect(
-        self,
-        user_id: int,
-        websocket: WebSocket,
-    ):
-        if user_id not in self.connections:
-            return
-
-        if websocket in self.connections[user_id]:
-            self.connections[user_id].remove(websocket)
-
-        if not self.connections[user_id]:
-            del self.connections[user_id]
-
-    async def send_to_user(
-        self,
-        user_id: int,
-        message: dict,
-    ):
-        connections = self.connections.get(user_id, [])
-
-        disconnected = []
-
-        for websocket in connections:
-            try:
-                await websocket.send_json(message)
-            except Exception:
-                disconnected.append(websocket)
-
-        for websocket in disconnected:
-            self.disconnect(user_id, websocket)
-
-
-alert_manager = AlertConnectionManager()
-
-    assert response.status_code == 400
-    assert (
-        response.json()["detail"]
-        == "Password reset token expired"
-    )
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-
-from app.core.security import decode_token
-from app.services.alert_service import alert_manager
-
-
-router = APIRouter(
-    prefix="/api/v1",
-    tags=["Alerts"],
-)
-
-
-@router.websocket("/ws/alerts")
-async def alerts_websocket(
-    websocket: WebSocket,
-):
-    token = websocket.query_params.get("token")
-
-    if not token:
-        await websocket.close(code=1008)
-        return
-
-    try:
-        payload = decode_token(token)
-
-        user_id = payload.get("user_id")
-
-        if not user_id:
-            await websocket.close(code=1008)
-            return
-
-    except Exception:
-        await websocket.close(code=1008)
-        return
-
-    await alert_manager.connect(
-        user_id=int(user_id),
-        websocket=websocket,
-    )
-
-    try:
-        while True:
-            await websocket.receive_text()
-
-    except WebSocketDisconnect:
-        alert_manager.disconnect(
-            user_id=int(user_id),
-            websocket=websocket,
-        )
