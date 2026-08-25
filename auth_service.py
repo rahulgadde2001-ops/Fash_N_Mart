@@ -1,589 +1,10 @@
-Yes. For your R3/R4 Platform Service, this is where code review becomes more practical: not just "what does the code do?", but "what happens in a real production situation, what problem occurs, and what method solves it?"
-Here are the important real-time problems you should know.
-1. Brute-force login attack
-Real problem
-An attacker repeatedly tries:
-user@gmail.com
-password1
-password2
-password3
-...
-Without protection, they can keep trying indefinitely.
-Your solution
-Rate limiting
-5 failed attempts
-       ↓
-within 15 minutes
-       ↓
-429 Too Many Requests
-You check both:
-Email
-+
-IP address
-Method used
-Database-backed rate limiting
-Your methods:
-get_recent_attempts_by_email()
-get_recent_attempts_by_ip()
-check_login_rate_limit()
-log_failed_login()
-Production improvement
-For multiple backend instances, Redis is generally better than relying only on database counters:
-Client
-  ↓
-Load Balancer
-  ↓
-Server 1 / Server 2 / Server 3
-  ↓
-Redis rate limiter
-Because all servers see the same counter.
-2. Attacker uses many IP addresses
-Problem
-Suppose attacker does:
-IP 1 → 5 attempts
-IP 2 → 5 attempts
-IP 3 → 5 attempts
-...
-An IP-only rate limit isn't enough.
-Solution
-Use multiple dimensions:
-Email-based limit
-+
-IP-based limit
-+
-Possibly device/fingerprint-based controls
-Your current implementation already does:
-email_attempts >= 5
-or
-ip_attempts >= 5
-That's a good foundation.
-3. User's access token gets stolen
-Problem
-Suppose an attacker gets:
-Access Token
-They can make API requests until the token expires.
-Solution
-Keep access tokens short-lived.
-Your intended design:
-Access Token → 15 minutes
-So even if stolen, the attacker's useful window is limited.
-Additional protection
-For highly sensitive operations:
-Access token
-+
-additional authorization
-+
-possibly re-authentication
-4. Refresh token gets stolen
-This is more serious because your refresh token lasts longer.
-Problem
-Attacker obtains:
-Refresh Token A
-They can potentially keep generating access tokens.
-Solution
-Store refresh tokens server-side:
-RefreshToken
- ├── token
- ├── user_id
- ├── expires_at
- └── is_revoked
-Then validate:
-Token exists?
-     ↓
-Not revoked?
-     ↓
-Not expired?
-     ↓
-YES → continue
-Your:
-get_refresh_token()
-does this.
-5. Refresh-token replay attack
-This is one of your important R4 test requirements.
-Real attack
-Imagine:
-Refresh Token A
-      ↓
-used
-      ↓
-rotated/revoked
-Attacker somehow has the old Token A.
-They try:
-Token A again
-It should fail
-Token A
-  ↓
-Already revoked/rotated
-  ↓
-401
-Method
-Refresh-token rotation + reuse detection
-Conceptually:
-Refresh A
-   ↓
-Revoke A
-   ↓
-Generate Refresh B
-Then:
-A → rejected
-B → valid
-Stronger solution
-If an old token is reused:
-Replay detected
-      ↓
-Revoke session/token family
-      ↓
-All related refresh tokens become invalid
-That's the "ideally revoke the whole session chain" part of your R4 requirement.
-6. Logout doesn't actually invalidate access token
-Problem
-User logs out:
-POST /logout
-You revoke the refresh token.
-But the existing access token may still work until its 15-minute expiration.
-That's normal for stateless JWT access tokens.
-Solution options
-Method 1 — Short expiration
-Access token → 15 min
-Simple and scalable.
-Method 2 — Token blacklist
-Store revoked access-token IDs.
-JWT jti
- ↓
-Redis
- ↓
-revoked
-But this makes every request more stateful.
-Method 3 — Session/version checking
-Store a session/version value and invalidate tokens belonging to an old session version.
-For your current project, short-lived access tokens + refresh-token revocation is a reasonable approach.
-7. Concurrent login attempts
-This is one of your R4 requirements.
-Problem
-Imagine the user has already failed 4 times.
-Then two requests arrive simultaneously:
-Request A → checks count = 4
-Request B → checks count = 4
-Both think:
-4 < 5 → allowed
-Then both fail and record attempts.
-You can get race-condition behavior.
-Solution
-Use atomic operations.
-For example:
-Redis INCR
-with an expiration window.
-Or database locking/transaction techniques where appropriate.
-Better production method
-Redis
- ↓
-Atomic increment
- ↓
-Check counter
- ↓
-Allow / reject
-This is why Redis is commonly used for distributed rate limiting.
-8. Two servers don't share rate-limit state
-Problem
-Suppose:
-Request 1 → Server A
-Request 2 → Server B
-Request 3 → Server C
-If each server stores rate-limit information in local memory:
-Server A → 2 attempts
-Server B → 2 attempts
-Server C → 1 attempt
-Each server thinks the user hasn't reached 5.
-Solution
-Use shared storage:
-             ┌── Server A
-Client → LB ─┼── Server B
-             └── Server C
-                   ↓
-                 Redis
-All servers share the same rate-limit state.
-9. Password reset token is reused
-Problem
-User requests password reset:
-Token ABC
-Uses it successfully.
-Then attacker tries:
-Token ABC again
-Solution
-Make reset tokens single-use.
-Database concept:
-PasswordResetToken
-
-token
-user_id
-expires_at
-used_at
-After successful reset:
-used_at = current time
-Then:
-used_at != NULL
-      ↓
-Reject
-10. Password reset token expires
-Problem
-User requests reset today but tries to use the link several days later.
-Solution
-Give the token a short lifetime.
-Your requirement:
-Reset token → 15 minutes
-Check:
-expires_at > now
-If false:
-401/400
-Token expired
-11. User enumeration
-Problem
-If login says:
-Email doesn't exist
-an attacker can discover valid accounts.
-Example:
-test@gmail.com → account exists
-abc@gmail.com  → doesn't exist
-Solution
-Use the same generic response:
-Invalid credentials
-Your code already does this:
-detail="Invalid credentials"
-That's good.
-12. Inactive user tries to log in
-Problem
-Admin disables:
-is_active = False
-But the user tries to log in.
-Solution
-Check:
-if not user.is_active:
-and reject authentication.
-Your code already does this.
-13. User has no role
-Problem
-A newly registered user may have:
-role_id = NULL
-But protected APIs need a role.
-Solution
-Don't issue a role-dependent access token when the role is missing.
-Your code:
-if not user.role:
-    raise HTTPException(...)
-This prevents:
-role = None
-from being used for RBAC.
-14. Privilege escalation
-Real problem
-A normal user tries:
-PATCH /admin/users/5/role
-and changes themselves to:
-CEO
-Solution
-Authorization must happen before the operation.
-JWT
- ↓
-Current user
- ↓
-Role
- ↓
-RBAC dependency
- ↓
-Allowed?
- ├── YES → operation
- └── NO → 403
-For example:
-Depends(require_any_role("ceo", "vp_operations"))
-15. Role hierarchy mistake
-Problem
-Suppose:
-CEO
- ↓
-VP Operations
- ↓
-Manager
-Endpoint requires:
-VP Operations
-CEO should be allowed if your hierarchy says CEO inherits VP permissions.
-But a flat check:
-user.role == required_role
-would reject CEO.
-Solution
-Use your:
-ROLE_HIERARCHY
-to resolve inherited permissions.
-This was one of your important R3 corrections.
-16. Admin changes someone's role while they're logged in
-This is a very real problem.
-Suppose:
-User = Analyst
-User gets an access token:
-role = analyst
-Admin changes database role:
-Analyst → Manager
-The old JWT still contains:
-role = analyst
-until it expires.
-Possible solutions
-Simple
-Short-lived access token:
-15 minutes
-New token gets the latest role.
-Stronger
-Store a:
-token_version
-or:
-permissions_version
-in the user/session.
-Then invalidate old tokens when permissions change.
-17. Admin deactivates a user who already has a token
-Similar issue.
-Database:
-is_active = False
-But an already-issued JWT may still be valid.
-Options
-Simple:
-15-minute access token
-Immediate invalidation:
-Check active/session state against DB or Redis for sensitive requests.
-Session versioning:
-session_version++
-Old JWT becomes invalid.
-18. Multiple sessions
-User logs in from:
-Laptop
-Phone
-Chrome
-You need:
-Session A
-Session B
-Session C
-Problem
-User says:
-"Log out my phone only."
-You shouldn't destroy every session.
-Solution
-Give each session its own refresh-token/session record:
-User
- ├── Session A → refresh token
- ├── Session B → refresh token
- └── Session C → refresh token
-Then revoke only Session B.
-This is your R4 per-session management.
-19. Logout all devices
-A common real-world requirement:
-"Log me out everywhere."
-Solution
-Revoke all active sessions for the user:
-User 10
- ├── Session A → revoked
- ├── Session B → revoked
- └── Session C → revoked
-Or use a session/token version:
-session_version = 7
-Old tokens:
-version = 6
-→ rejected.
-20. Audit requirements
-Problem
-Admin changes:
-Rahul
-Analyst → Manager
-Six months later:
-"Who changed Rahul's role?"
-Without audit logging, you don't know.
-Solution
-Audit table:
-AuditLog
-
-actor_id
-target_user_id
-action
-old_value
-new_value
-ip_address
-timestamp
-Example:
-CEO
-User 15
-ROLE_CHANGED
-Analyst → Manager
-192.168.1.5
-2026-08-21 10:30
-21. Database transaction failure
-Problem
-Suppose login does:
-Create refresh token
-       ↓
-DB commit fails
-But your application has already generated/returned something.
-Or admin role change updates one table but fails before audit logging.
-Solution
-Use database transactions.
-Conceptually:
-BEGIN
- ↓
-Update user
- ↓
-Create audit log
- ↓
-COMMIT
-If something fails:
-ROLLBACK
-This keeps related changes consistent.
-22. Duplicate registration under concurrency
-Problem
-Two requests arrive simultaneously:
-Request A → check email → doesn't exist
-Request B → check email → doesn't exist
-Both then try to create:
-rahul@gmail.com
-Solution
-Don't rely only on:
-existing = db.query(...).first()
-Also enforce a UNIQUE constraint on email at the database level.
-Then the DB guarantees:
-email UNIQUE
-Application-level check + database constraint is stronger.
-23. Timing/security information leaks
-Problem
-If your application behaves noticeably differently for:
-existing email + wrong password
-versus:
-non-existing email
-an attacker may infer whether an account exists.
-Solution
-Use a consistent authentication path and generic errors.
-Your:
-Invalid credentials
-approach is good.
-24. JWT secret gets leaked
-Problem
-If:
-SECRET_KEY
-is hardcoded or committed to Git, attackers can potentially forge tokens.
-Solution
-Use environment/secret management:
-.env
-environment variables
-Docker/Kubernetes secrets
-cloud secret manager
-Never commit the real secret.
-25. Refresh token stored improperly
-Problem
-If you store raw refresh tokens in your DB and the database is compromised, attackers may be able to use those tokens directly.
-Stronger production approach
-Store a hash of the refresh token, similar in principle to passwords.
-Client:
-RefreshToken ABC
-
-Database:
-hash(ABC)
-When presented:
-ABC
- ↓
-hash
- ↓
-compare DB hash
-Whether you need this depends on your security requirements, but it's a useful production improvement to mention in review.
-The Methods You Should Know
-For your project, remember these methods:
-Problem
-Method
-Brute force
-Rate limiting
-Distributed rate limiting
-Redis
-Stolen access token
-Short expiry
-Stolen refresh token
-Rotation + revocation
-Refresh replay
-Reuse detection
-Logout
-Refresh-token revocation
-Logout all devices
-Revoke session family / versioning
-Password attack
-Password hashing + policy
-Password reset abuse
-Short-lived single-use tokens
-Account enumeration
-Generic errors
-Privilege escalation
-RBAC
-Hierarchy permissions
-Role hierarchy
-Role changes
-Audit log
-Session management
-Per-session refresh tokens
-Concurrent requests
-Atomic operations/transactions
-Duplicate users
-DB unique constraint
-Data inconsistency
-DB transactions
-Multiple backend servers
-Redis/shared state
-Token invalidation
-Token/session versioning
-Security investigation
-Audit logs
-Most Important Architecture
-For your R3/R4 project, the production-shaped architecture becomes:
-                    CLIENT
-                      │
-                      ↓
-               ┌─────────────┐
-               │ Load Balancer│
-               └──────┬──────┘
-                      │
-          ┌───────────┼───────────┐
-          ↓           ↓           ↓
-       FastAPI     FastAPI     FastAPI
-       Server 1    Server 2    Server 3
-          │           │           │
-          └───────────┼───────────┘
-                      │
-              ┌───────┴───────┐
-              ↓               ↓
-           PostgreSQL       Redis
-              │               │
-              │               ├── Rate limits
-              │               ├── Sessions
-              │               └── Temporary state
-              │
-              ├── Users
-              ├── Refresh tokens
-              ├── Failed logins
-              ├── Audit logs
-              └── Role history
-If the reviewer asks "Why Redis?"
-Say:
-"For distributed, high-frequency temporary state such as rate limiting, session state, or token-reuse detection. Database storage is useful for durable records like users and audit logs, while Redis gives fast shared state across multiple API instances."
-If they ask "Why WebSockets?"
-For your R3/R4 authentication requirements, WebSockets are not necessary.
-REST APIs are enough for:
-Login
-Logout
-Refresh
-Password reset
-Admin user management
-Session management
-Audit logs
-WebSockets become useful later for things like:
-Real-time admin notifications
-Live audit events
-Security alerts
-Real-time dashboard updates
-So don't add WebSockets just because something is "real-time." Authentication itself doesn't require WebSockets.
-
+auth serv
 from datetime import datetime, timedelta, timezone
+import secrets
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-
+from app.services.email_service import MockEmailService
 from app.core.password_validator import validate_password
 from app.core.security import (
     create_access_token,
@@ -593,12 +14,26 @@ from app.core.security import (
 )
 
 from app.models.users import User
+from app.models.password_reset_tokens import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.failed_login_attempts import FailedLoginAttempt
+
 from app.schemas.auth import RegisterRequest
+
+from app.services.audit_service import (
+    LOGIN_SUCCESS,
+    LOGIN_FAILED,
+    PASSWORD_RESET,
+    create_audit_log,
+)
+
 
 MAX_ATTEMPTS = 5
 WINDOW = timedelta(minutes=15)
+
+RESET_TOKEN_EXPIRE_MINUTES = 15
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+
 
 # ============================================================
 # REFRESH TOKEN
@@ -608,21 +43,23 @@ def save_refresh_token(
     db: Session,
     user_id: int,
     token: str,
-    expires_at: datetime
+    expires_at: datetime,
 ):
     refresh = RefreshToken(
         user_id=user_id,
         token=token,
         expires_at=expires_at,
+        is_revoked=False,
     )
 
     db.add(refresh)
-    db.commit()
+    
+    return refresh
 
 
 def get_refresh_token(
     db: Session,
-    token: str
+    token: str,
 ):
     now = datetime.now(timezone.utc)
 
@@ -636,14 +73,15 @@ def get_refresh_token(
         .first()
     )
 
+
 def revoke_refresh_token(
     db: Session,
-    token: str
+    token: str,
 ):
     refresh = (
         db.query(RefreshToken)
         .filter(
-            RefreshToken.token == token
+            RefreshToken.token == token,
         )
         .first()
     )
@@ -651,34 +89,36 @@ def revoke_refresh_token(
     if refresh is None:
         return False
 
+    if refresh.is_revoked:
+        return False
+
     refresh.is_revoked = True
-    db.commit()
 
     return True
 
+
 # ============================================================
-# FAILED LOGIN TRACKING
+# FAILED LOGIN TRACKING / RATE LIMITING
 # ============================================================
 
 def log_failed_login(
     db: Session,
     email: str,
-    ip_address: str
+    ip_address: str,
 ):
-    db.add(
-        FailedLoginAttempt(
-            email=email,
-            ip_address=ip_address,
-            attempted_at=datetime.now(timezone.utc),
-        )
+    failed_attempt = FailedLoginAttempt(
+        email=email.lower(),
+        ip_address=ip_address,
+        attempted_at=datetime.now(timezone.utc),
     )
 
+    db.add(failed_attempt)
     db.commit()
 
 
 def get_recent_attempts_by_email(
     db: Session,
-    email: str
+    email: str,
 ):
     cutoff = (
         datetime.now(timezone.utc)
@@ -688,7 +128,7 @@ def get_recent_attempts_by_email(
     return (
         db.query(FailedLoginAttempt)
         .filter(
-            FailedLoginAttempt.email == email,
+            FailedLoginAttempt.email == email.lower(),
             FailedLoginAttempt.attempted_at >= cutoff,
         )
         .count()
@@ -697,7 +137,7 @@ def get_recent_attempts_by_email(
 
 def get_recent_attempts_by_ip(
     db: Session,
-    ip_address: str
+    ip_address: str,
 ):
     cutoff = (
         datetime.now(timezone.utc)
@@ -717,7 +157,7 @@ def get_recent_attempts_by_ip(
 def check_login_rate_limit(
     db: Session,
     email: str,
-    client_ip: str
+    client_ip: str,
 ):
     email_attempts = get_recent_attempts_by_email(
         db=db,
@@ -738,18 +178,44 @@ def check_login_rate_limit(
             detail="Too many login attempts. Try again after 15 minutes.",
         )
 
+
+def clear_failed_login_attempts(
+    db: Session,
+    email: str,
+    ip_address: str,
+):
+    """
+    Clear failed login attempts after a successful login.
+
+    This prevents a previous sequence of failed attempts
+    from carrying over after the user has successfully
+    authenticated.
+    """
+
+    db.query(FailedLoginAttempt).filter(
+        FailedLoginAttempt.email == email.lower(),
+        FailedLoginAttempt.ip_address == ip_address,
+    ).delete(
+        synchronize_session=False,
+    )
+
+    db.commit()
+
+
 # ============================================================
 # REGISTER
 # ============================================================
 
 def register_user(
     db: Session,
-    request: RegisterRequest
+    request: RegisterRequest,
 ):
+    email = request.email.lower()
+
     existing = (
         db.query(User)
         .filter(
-            User.email == request.email
+            User.email == email,
         )
         .first()
     )
@@ -757,31 +223,32 @@ def register_user(
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User already exists"
+            detail="User already exists",
         )
 
-    #Validate password before hashing
+    # Validate the plain password BEFORE hashing.
     validate_password(request.password)
-    
+
     hashed_password = hash_password(
-        request.password
+        request.password,
     )
 
     user = User(
-        email=request.email,
+        email=email,
         full_name=request.full_name,
         password=hashed_password,
         is_active=True,
-        role_id=None
-
+        role_id=None,
     )
+
     db.add(user)
     db.commit()
     db.refresh(user)
 
     return {
-        "message": "User registered successfully"
+        "message": "User registered successfully",
     }
+
 
 # ============================================================
 # LOGIN
@@ -790,14 +257,14 @@ def register_user(
 def login(
     db: Session,
     username: str,
-    password: str
+    password: str,
 ):
     username = username.lower()
 
     user = (
         db.query(User)
         .filter(
-            User.email == username
+            User.email == username,
         )
         .first()
     )
@@ -807,34 +274,36 @@ def login(
 
     if not verify_password(
         password,
-        user.password
+        user.password,
     ):
         return None
 
     return user
 
+
 def login_user(
     db: Session,
     username: str,
     password: str,
-    client_ip: str
+    client_ip: str,
 ):
     username = username.lower()
 
+    # Check rate limit BEFORE processing credentials.
     check_login_rate_limit(
         db=db,
         email=username,
         client_ip=client_ip,
     )
 
-    user= login(
+    user = login(
         db=db,
         username=username,
         password=password,
     )
 
     # --------------------------------------------------------
-    # Wrong username OR wrong password
+    # Invalid username or password
     # --------------------------------------------------------
 
     if not user:
@@ -844,10 +313,24 @@ def login_user(
             ip_address=client_ip,
         )
 
+        create_audit_log(
+            db=db,
+            event_type=LOGIN_FAILED,
+            email=username,
+            ip_address=client_ip,
+            details="Invalid credentials",
+        )
+
+        db.commit()
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
+
+    # --------------------------------------------------------
+    # Inactive user
+    # --------------------------------------------------------
 
     if not user.is_active:
         log_failed_login(
@@ -856,10 +339,25 @@ def login_user(
             ip_address=client_ip,
         )
 
+        create_audit_log(
+            db=db,
+            event_type=LOGIN_FAILED,
+            user_id=user.id,
+            email=user.email,
+            ip_address=client_ip,
+            details="Inactive user",
+        )
+
+        db.commit()
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
+
+    # --------------------------------------------------------
+    # Role must be assigned
+    # --------------------------------------------------------
 
     if not user.role:
         raise HTTPException(
@@ -892,7 +390,7 @@ def login_user(
 
     refresh_expires_at = (
         datetime.now(timezone.utc)
-        + timedelta(days=7)
+        + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     )
 
     save_refresh_token(
@@ -902,8 +400,1169 @@ def login_user(
         expires_at=refresh_expires_at,
     )
 
+    # --------------------------------------------------------
+    # Successful login audit
+    # --------------------------------------------------------
+
+    create_audit_log(
+        db=db,
+        event_type=LOGIN_SUCCESS,
+        user_id=user.id,
+        email=user.email,
+        ip_address=client_ip,
+        details="Login successful",
+    )
+
+    db.commit()
+
+    # --------------------------------------------------------
+    # Clear previous failed login attempts
+    # --------------------------------------------------------
+
+    db.query(FailedLoginAttempt).filter(
+        FailedLoginAttempt.email == username,
+        FailedLoginAttempt.ip_address == client_ip,
+    ).delete(
+        synchronize_session=False,
+    )
+
+    db.commit()
+
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
     }
+
+
+# ============================================================
+# PASSWORD RESET - REQUEST
+# ============================================================
+
+def request_password_reset(
+    db: Session,
+    email: str,
+):
+    email = email.lower()
+
+    user = (
+        db.query(User)
+        .filter(
+            User.email == email,
+        )
+        .first()
+    )
+
+    # Do not reveal whether the email exists.
+    if user is None:
+        return
+
+    # --------------------------------------------------------
+    # Invalidate all previous unused reset tokens.
+    # --------------------------------------------------------
+
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used.is_(False),
+    ).update(
+        {
+            PasswordResetToken.used: True,
+        },
+        synchronize_session=False,
+    )
+
+    # --------------------------------------------------------
+    # Generate a new secure reset token.
+    # --------------------------------------------------------
+
+    token = secrets.token_urlsafe(32)
+
+    expires_at = (
+        datetime.now(timezone.utc)
+        + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES)
+    )
+
+    reset_token = PasswordResetToken(
+        user_id=user.id,
+        token=token,
+        expires_at=expires_at,
+        used=False,
+    )
+
+    db.add(reset_token)
+    db.commit()
+
+    # --------------------------------------------------------
+    # Mock email for development/testing.
+    # --------------------------------------------------------
+
+    MockEmailService.send_password_reset_email(
+    email=user.email,
+    reset_token=token,
+)
+
+
+# ============================================================
+# PASSWORD RESET - CONFIRM
+# ============================================================
+
+def reset_password(
+    db: Session,
+    token: str,
+    new_password: str,
+):
+    # --------------------------------------------------------
+    # Find token
+    # --------------------------------------------------------
+
+    reset_token = (
+        db.query(PasswordResetToken)
+        .filter(
+            PasswordResetToken.token == token,
+        )
+        .first()
+    )
+
+    if reset_token is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid password reset token",
+        )
+
+    # --------------------------------------------------------
+    # Single-use enforcement
+    # --------------------------------------------------------
+
+    if reset_token.used:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password reset token already used",
+        )
+
+    # --------------------------------------------------------
+    # Expiration check
+    # --------------------------------------------------------
+
+    now = datetime.now(timezone.utc)
+
+    if reset_token.expires_at <= now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password reset token expired",
+        )
+
+    # --------------------------------------------------------
+    # Find user
+    # --------------------------------------------------------
+
+    user = (
+        db.query(User)
+        .filter(
+            User.id == reset_token.user_id,
+        )
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid password reset token",
+        )
+
+    # --------------------------------------------------------
+    # Validate new password BEFORE hashing
+    # --------------------------------------------------------
+
+    validate_password(new_password)
+
+    # --------------------------------------------------------
+    # Update password
+    # --------------------------------------------------------
+
+    user.password = hash_password(
+        new_password,
+    )
+
+    # --------------------------------------------------------
+    # Revoke all active refresh tokens.
+    #
+    # This forces existing sessions to authenticate again
+    # after a password reset.
+    # --------------------------------------------------------
+
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user.id,
+        RefreshToken.is_revoked.is_(False),
+    ).update(
+        {
+            RefreshToken.is_revoked: True,
+        },
+        synchronize_session=False,
+    )
+
+    # --------------------------------------------------------
+    # Make reset token single-use
+    # --------------------------------------------------------
+
+    reset_token.used = True
+
+    # --------------------------------------------------------
+    # Audit password reset
+    # --------------------------------------------------------
+
+    create_audit_log(
+        db=db,
+        event_type=PASSWORD_RESET,
+        user_id=user.id,
+        email=user.email,
+        details="Password reset completed",
+    )
+
+    db.commit()
+
+
+Registration behavior: Self-registration creates the account without a role. The account must be assigned a role by an authorized administrator before the user can log in. Until a role is assigned, login returns 401 User role is not assigned.
+
+authrotes from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError
+from sqlalchemy.orm import Session
+
+from app.core.config import TRUST_PROXY
+from app.core.dependencies import(
+    get_current_user,
+    ROLE_HIERARCHY
+)
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+)
+from app.database import get_db
+from app.models.refresh_token import RefreshToken
+from app.models.users import User
+from app.schemas.auth import (
+    AccessTokenResponse,
+    LogoutRequest,
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    RefreshRequest,
+    RegisterRequest,
+    TokenResponse,
+)
+from app.services.audit_service import (
+    TOKEN_REVOKED,
+    TOKEN_ROTATED,
+    create_audit_log,
+)
+from app.services.auth_service import (
+    get_refresh_token,
+    register_user,
+    request_password_reset,
+    reset_password,
+    save_refresh_token,
+    login_user,
+)
+
+router = APIRouter(
+    prefix="/api/v1/auth",
+    tags=["Authentication"],
+)
+
+
+# ============================================================
+# CLIENT IP
+# ============================================================
+
+def get_client_ip(request: Request) -> str:
+    """
+    Return the client's IP address.
+
+    X-Forwarded-For is trusted only when the application
+    is configured to run behind a trusted proxy.
+    """
+    if TRUST_PROXY:
+        forwarded = request.headers.get("X-Forwarded-For")
+
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+
+    return request.client.host if request.client else "unknown"
+
+
+# ============================================================
+# REGISTER
+# ============================================================
+
+@router.post("/register")
+def register(
+    request: RegisterRequest,
+    db: Session = Depends(get_db),
+):
+    return register_user(
+        db=db,
+        request=request,
+    )
+
+
+# ============================================================
+# LOGIN
+# ============================================================
+
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+)
+def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    return login_user(
+        db=db,
+        username=form_data.username,
+        password=form_data.password,
+        client_ip=get_client_ip(request),
+    )
+
+
+# ============================================================
+# REFRESH TOKEN
+# ============================================================
+
+@router.post(
+    "/refresh",
+    response_model=AccessTokenResponse,
+)
+def refresh_token(
+    body: RefreshRequest,
+    db: Session = Depends(get_db),
+):
+    # --------------------------------------------------------
+    # Decode JWT
+    # --------------------------------------------------------
+
+    try:
+        payload = decode_token(body.refresh_token)
+
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+
+    # --------------------------------------------------------
+    # Ensure this is a refresh token
+    # --------------------------------------------------------
+
+    if payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        )
+
+    # --------------------------------------------------------
+    # Validate refresh token against database
+    # Checks:
+    #   - token exists
+    #   - token is not revoked
+    #   - token is not expired
+    # --------------------------------------------------------
+
+    refresh = get_refresh_token(
+        db=db,
+        token=body.refresh_token,
+    )
+
+    if refresh is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked refresh token",
+        )
+
+    # --------------------------------------------------------
+    # Find user
+    # --------------------------------------------------------
+
+    user = (
+        db.query(User)
+        .filter(User.id == refresh.user_id)
+        .first()
+    )
+
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user",
+        )
+
+    if user.role is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User role is not assigned",
+        )
+
+    # --------------------------------------------------------
+    # Create new access token
+    # --------------------------------------------------------
+
+    new_access_token = create_access_token(
+        {
+            "sub": user.email,
+            "user_id": user.id,
+            "role": user.role.name,
+        }
+    )
+
+    # --------------------------------------------------------
+    # Create new refresh token
+    # --------------------------------------------------------
+
+    new_refresh_token = create_refresh_token(
+        {
+            "sub": user.email,
+            "user_id": user.id,
+        }
+    )
+
+    new_refresh_expires_at = (
+        datetime.now(timezone.utc)
+        + timedelta(days=7)
+    )
+
+    # --------------------------------------------------------
+    # Refresh-token rotation
+    #
+    # Old token becomes unusable.
+    # New token becomes the active refresh token.
+    # --------------------------------------------------------
+
+    refresh.is_revoked = True
+
+    save_refresh_token(
+        db=db,
+        user_id=user.id,
+        token=new_refresh_token,
+        expires_at=new_refresh_expires_at,
+    )
+    db.commit()
+    
+    # --------------------------------------------------------
+    # Audit refresh-token rotation
+    # --------------------------------------------------------
+
+    create_audit_log(
+        db=db,
+        event_type=TOKEN_ROTATED,
+        user_id=user.id,
+        email=user.email,
+        details="Refresh token rotated",
+    )
+
+    db.commit()
+
+    return {
+        "access_token": new_access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer",
+    }
+
+
+# ============================================================
+# PERMISSIONS
+# ============================================================
+
+@router.get("/me/permissions")
+def my_permissions(
+    user=Depends(get_current_user),
+):
+    if user.role is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User role has not been assigned",
+        )
+
+    role = user.role.name
+
+    return {
+        "role": role,
+        "permissions": sorted(
+            list(
+                ROLE_HIERARCHY.get(
+                    role,
+                    {role},
+                )
+            )
+        ),
+    }
+
+
+# ============================================================
+# LOGOUT
+# ============================================================
+
+@router.post("/logout")
+def logout(
+    body: LogoutRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    refresh = (
+        db.query(RefreshToken)
+        .filter(
+            RefreshToken.token == body.refresh_token
+        )
+        .first()
+    )
+
+    if refresh is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Refresh token not found",
+        )
+    if refresh.user_id != current_user.id:
+        raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Cannot revoke another user's session",
+    )
+
+    if refresh.is_revoked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refresh token already revoked",
+        )
+
+    # Revoke only this refresh-token session.
+    refresh.is_revoked = True
+
+    create_audit_log(
+        db=db,
+        event_type=TOKEN_REVOKED,
+        user_id=refresh.user_id,
+        details="Refresh token revoked during logout",
+    )
+
+    db.commit()
+
+    return {
+        "message": "Logged out successfully",
+    }
+
+
+# ============================================================
+# PASSWORD RESET - REQUEST
+# ============================================================
+
+@router.post("/password-reset/request")
+def password_reset_request(
+    payload: PasswordResetRequest,
+    db: Session = Depends(get_db),
+):
+    request_password_reset(
+        db=db,
+        email=payload.email,
+    )
+
+    # Do not reveal whether the account exists.
+    return {
+        "message": (
+            "If the account exists, "
+            "a password reset token has been sent."
+        )
+    }
+
+
+# ============================================================
+# PASSWORD RESET - CONFIRM
+# ============================================================
+
+@router.post("/password-reset/reset")
+def password_reset_confirm(
+    payload: PasswordResetConfirm,
+    db: Session = Depends(get_db),
+):
+    reset_password(
+        db=db,
+        token=payload.token,
+        new_password=payload.new_password,
+    )
+
+    return {
+        "message": "Password has been reset successfully.",
+    }
+
+adminroutes from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+
+from app.models.users import User
+from app.models.roles import Role as RoleModel
+from app.models.role_change_history import RoleChangeHistory
+from app.models.auth_audit_logs import AuthAuditLog
+from app.models.refresh_token import RefreshToken
+
+from app.schemas.user import (
+    AdminCreateUserRequest,
+    RoleChangeRequest,
+    RoleChangeHistoryResponse,
+    ForceResetPasswordRequest,
+    UserResponse,
+)
+from app.schemas.admin import AuditLogResponse
+from app.schemas.auth import SessionResponse
+
+from app.services.audit_service import (
+    create_audit_log,
+    TOKEN_REVOKED,
+    ROLE_CHANGED,
+)
+
+from app.core.dependencies import (
+    require_role,
+    require_any_role,
+)
+from app.core.password_validator import validate_password
+from app.core.security import hash_password
+
+
+router = APIRouter(
+    prefix="/api/v1/admin",
+    tags=["Admin"]
+)
+
+
+class AdminTestResponse(BaseModel):
+    message: str
+    user: UserResponse
+
+
+# ============================================================
+# ADMIN TEST
+# ============================================================
+
+@router.get(
+    "/test",
+    response_model=AdminTestResponse
+)
+def admin_test(
+    user=Depends(
+        require_role("ceo", "vp_operations")
+    )
+):
+    return {
+        "message": "Admin access granted",
+        "user": {
+            "user_id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role.name if user.role else None,
+            "is_active": user.is_active,
+        }
+    }
+
+
+# ============================================================
+# LIST USERS
+# ============================================================
+
+@router.get(
+    "/users",
+    response_model=list[UserResponse]
+)
+def list_users(
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    )
+):
+    users = (
+        db.query(User)
+        .order_by(User.id)
+        .all()
+    )
+
+    return [
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role.name if user.role else None,
+            "is_active": user.is_active,
+        }
+        for user in users
+    ]
+
+
+# ============================================================
+# CREATE USER
+# ============================================================
+
+@router.post(
+    "/users",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED
+)
+def create_user(
+    request: AdminCreateUserRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    )
+):
+    email = request.email.lower()
+
+    existing = (
+        db.query(User)
+        .filter(User.email == email)
+        .first()
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User already exists"
+        )
+
+    validate_password(request.password)
+
+    role_id = None
+    role_name = None
+
+    if request.role is not None:
+        role = (
+            db.query(RoleModel)
+            .filter(
+                RoleModel.name == request.role.value
+            )
+            .first()
+        )
+
+        if role is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid role"
+            )
+
+        role_id = role.id
+        role_name = role.name
+
+    user = User(
+        email=email,
+        full_name=request.full_name,
+        password=hash_password(request.password),
+        role_id=role_id,
+        is_active=True,
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    if role_name is not None:
+        history = RoleChangeHistory(
+            user_id=user.id,
+            old_role=None,
+            new_role=role_name,
+            changed_by=current_user.id,
+        )
+
+        db.add(history)
+        db.commit()
+
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role.name if user.role else None,
+        "is_active": user.is_active,
+    }
+
+
+# ============================================================
+# DEACTIVATE USER
+# ============================================================
+
+@router.patch(
+    "/users/{user_id}/deactivate",
+    response_model=UserResponse
+)
+def deactivate_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    )
+):
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot deactivate your own account"
+        )
+
+    user.is_active = False
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role.name if user.role else None,
+        "is_active": user.is_active,
+    }
+
+
+# ============================================================
+# ASSIGN ROLE
+# ============================================================
+
+@router.patch(
+    "/users/{user_id}/role",
+    response_model=UserResponse
+)
+def change_user_role(
+    user_id: int,
+    request: RoleChangeRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    )
+):
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    new_role = (
+        db.query(RoleModel)
+        .filter(
+            RoleModel.name == request.role.value
+        )
+        .first()
+    )
+
+    if new_role is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid role"
+        )
+
+    old_role = (
+        user.role.name
+        if user.role
+        else None
+    )
+
+    if old_role == new_role.name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User already has this role"
+        )
+
+    user.role_id = new_role.id
+
+    history = RoleChangeHistory(
+        user_id=user.id,
+        old_role=old_role,
+        new_role=new_role.name,
+        changed_by=current_user.id,
+    )
+
+    db.add(history)
+
+    # FIX: ROLE_CHANGED must be imported from audit_service
+    create_audit_log(
+        db=db,
+        event_type=ROLE_CHANGED,
+        user_id=user.id,
+        email=user.email,
+        details=(
+            f"Role changed from {old_role} "
+            f"to {new_role.name} "
+            f"by user {current_user.id}"
+        ),
+    )
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role.name if user.role else None,
+        "is_active": user.is_active,
+    }
+
+
+# ============================================================
+# ROLE CHANGE HISTORY
+# ============================================================
+
+@router.get(
+    "/users/{user_id}/role-history",
+    response_model=list[RoleChangeHistoryResponse]
+)
+def role_change_history(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    )
+):
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    history = (
+        db.query(RoleChangeHistory)
+        .filter(
+            RoleChangeHistory.user_id == user_id
+        )
+        .order_by(
+            RoleChangeHistory.changed_at.desc()
+        )
+        .all()
+    )
+
+    return [
+        {
+            "id": item.id,
+            "user_id": item.user_id,
+            "old_role": item.old_role,
+            "new_role": item.new_role,
+            "changed_by": item.changed_by,
+            "changed_at": item.changed_at.isoformat(),
+        }
+        for item in history
+    ]
+
+
+# ============================================================
+# FORCE RESET PASSWORD
+# ============================================================
+
+@router.post(
+    "/users/{user_id}/force-reset-password"
+)
+def force_reset_password(
+    user_id: int,
+    request: ForceResetPasswordRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    )
+):
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    validate_password(request.new_password)
+
+    user.password = hash_password(
+        request.new_password
+    )
+
+# Revoke all active sessions after force password reset
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user.id,
+        RefreshToken.is_revoked.is_(False),
+    ).update(
+    {
+            RefreshToken.is_revoked: True
+    },
+    synchronize_session=False,
+)
+
+    db.commit()
+
+    return {
+    "message": "Password reset successfully"
+}
+
+
+# ============================================================
+# ACTIVE SESSIONS
+# ============================================================
+
+@router.get(
+    "/users/{user_id}/sessions",
+    response_model=list[SessionResponse]
+)
+def list_user_sessions(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    )
+):
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    now = datetime.now(timezone.utc)
+
+    sessions = (
+        db.query(RefreshToken)
+        .filter(
+            RefreshToken.user_id == user_id,
+            RefreshToken.is_revoked.is_(False),
+            RefreshToken.expires_at > now
+        )
+        .order_by(
+            RefreshToken.created_at.desc()
+        )
+        .all()
+    )
+
+    return [
+        {
+            "id": session.id,
+            "user_id": session.user_id,
+            "created_at": session.created_at.isoformat(),
+            "expires_at": session.expires_at.isoformat(),
+            "is_revoked": session.is_revoked,
+        }
+        for session in sessions
+    ]
+
+
+# ============================================================
+# REVOKE SESSION
+# ============================================================
+
+@router.delete(
+    "/users/{user_id}/sessions/{session_id}"
+)
+def revoke_user_session(
+    user_id: int,
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    )
+):
+    session = (
+        db.query(RefreshToken)
+        .filter(
+            RefreshToken.id == session_id,
+            RefreshToken.user_id == user_id
+        )
+        .first()
+    )
+
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+
+    if session.is_revoked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Session already revoked"
+        )
+
+    session.is_revoked = True
+
+    create_audit_log(
+        db=db,
+        event_type=TOKEN_REVOKED,
+        user_id=user_id,
+        details=(
+            f"Session {session_id} revoked "
+            f"by user {current_user.id}"
+        ),
+    )
+
+    db.commit()
+
+    return {
+        "message": "Session revoked successfully"
+    }
+
+
+# ============================================================
+# AUDIT LOGS
+# ============================================================
+
+@router.get(
+    "/audit-logs",
+    response_model=list[AuditLogResponse],
+)
+def get_audit_logs(
+    user_id: int | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        require_any_role("ceo", "vp_operations")
+    ),
+):
+    query = db.query(AuthAuditLog)
+
+    if user_id is not None:
+        query = query.filter(
+            AuthAuditLog.user_id == user_id
+        )
+
+    if event_type is not None:
+        query = query.filter(
+            AuthAuditLog.event_type == event_type
+        )
+
+    return (
+        query
+        .order_by(AuthAuditLog.created_at.desc())
+        .limit(500)
+        .all()
+    )
